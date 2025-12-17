@@ -1,0 +1,23 @@
+version: '3.8'
+services:
+  antigravity-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        TARGETPLATFORM: linux/amd64
+    container_name: antigravity-api-local
+    ports:
+      - "8045:8045"
+    environment:
+      - PANEL_USER=admin
+      - PANEL_PASSWORD=设置你的密码
+      - API_KEY=sk-text
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: [ "CMD", "node", "-e", "require('http').get('http://localhost:' + process.env.PORT + '/healthz', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) }).on('error', () => process.exit(1))" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
