@@ -328,12 +328,18 @@ function generateRequestBody(openaiMessages, modelName, parameters, openaiTools,
     modelName === "rev19-uic3-1p" ||
     modelName === "gpt-oss-120b-medium";
 
-  // 为避免 Anthropic thinking + tools 触发
-  // “messages.*.content[0].type 必须是 thinking” 的报错，
-  // 当使用 Claude 系列思维模型且历史中已出现工具调用时，关闭 thinking。
+  // 检测最后一条消息是否为 assistant（即 prefill 情况）
+  const isAssistantPrefill =
+    Array.isArray(openaiMessages) &&
+    openaiMessages.length > 0 &&
+    openaiMessages[openaiMessages.length - 1].role === 'assistant';
+
+  // 为避免 Anthropic thinking + tools 或 prefill 触发
+  // "messages.*.content[0].type 必须是 thinking" 的报错，
+  // 当使用 Claude 系列思维模型且历史中已出现工具调用或存在 prefill 时，关闭 thinking。
   const enableThinking =
     baseEnableThinking &&
-    !(actualModelName.includes('claude') && hasAssistantToolCalls);
+    !(actualModelName.includes('claude') && (hasAssistantToolCalls || isAssistantPrefill));
 
   // 先将 OpenAI 风格 messages 转换为 Antigravity/Gemini contents
   const contents = openaiMessageToAntigravity(openaiMessages, actualModelName);

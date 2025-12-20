@@ -516,7 +516,7 @@ export async function generateAssistantResponse(requestBody, token, callback) {
             durationMs: Date.now() - startTime,
             body: error?.message || error
         });
-        await handleApiError(error, token);
+        throw error;
     }
 
     return { usage: state.usage };
@@ -588,7 +588,7 @@ export async function getAvailableModels() {
             durationMs: Date.now() - startTime,
             body: error?.message || error
         });
-        await handleApiError(error, token);
+        throw error;
     }
 }
 
@@ -665,7 +665,7 @@ export async function generateAssistantResponseNoStream(requestBody, token) {
     try {
         data = await callNoStreamApi(requestBody, token);
     } catch (error) {
-        await handleApiError(error, token);
+        throw error;
     }
 
     // 解析响应内容
@@ -720,7 +720,7 @@ export async function generateGeminiResponseNoStream(requestBody, token) {
         // 上游返回通常为 { response: { ... } } 结构，这里只透传内部 response
         return data?.response ?? data;
     } catch (error) {
-        await handleApiError(error, token);
+        throw error;
     }
 }
 
