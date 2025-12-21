@@ -1,5 +1,5 @@
 # Antigravity2api-nodejs
-
+[![bigmodel.cn](https://assets.router-for.me/chinese.png)](https://www.bigmodel.cn/claude-code?ic=J2QPQGUXXQ)
 ## 项目说明
 
 当前项目是基于[liuw1535](https://github.com/liuw1535) 大佬的 [antigravity2api-nodejs](https://github.com/liuw1535/antigravity2api-nodejs) 做的修改和迭代
