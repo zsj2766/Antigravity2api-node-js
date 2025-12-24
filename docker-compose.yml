@@ -1,7 +1,7 @@
 version: '3.8'
 services:
   antigravity-api:
-    image: ghcr.io/zhongruan0522/antigravity2api-node-js:latest
+    image: ghcr.io/zsj2766/antigravity2api-node-js:latest
     container_name: antigravity-api
     restart: unless-stopped
     ports:
