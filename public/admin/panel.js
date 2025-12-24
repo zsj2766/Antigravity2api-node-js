@@ -133,9 +133,8 @@ function renderUsageCard(account) {
   const models = usage.models && usage.models.length > 0 ? usage.models.join(', ') : '暂无数据';
   const lastUsed = usage.lastUsedAt ? new Date(usage.lastUsedAt).toLocaleString() : '未使用';
 
-  // 运行时统计
-  const key = account.projectId || account.access_token;
-  const stats = tokenRuntimeStats[key] || {
+  // 运行时统计 - 使用 index 作为 key
+  const stats = tokenRuntimeStats[account.index] || {
     lastUsed: 0,
     lastFailure: 0,
     failureCount: 0,

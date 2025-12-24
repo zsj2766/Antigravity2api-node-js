@@ -1483,12 +1483,9 @@ app.get('/admin/tokens/stats', requirePanelAuthApi, (req, res) => {
   try {
     const stats = {};
     if (tokenManager && Array.isArray(tokenManager.tokens)) {
-      tokenManager.tokens.forEach(token => {
-        const key = token.projectId || token.access_token;
-        if (!key) return;
-
+      tokenManager.tokens.forEach((token, index) => {
         const s = tokenManager.getStats(token);
-        stats[key] = {
+        stats[index] = {
           ...s,
           score: tokenManager.calculateScore(token),
           inCooldown: tokenManager.isInCooldown(token)
@@ -1570,7 +1567,15 @@ function attachImageUrlsToGeminiResponse(response) {
 }
 
 // Static assets for admin panel
-const adminStatic = express.static(path.join(__dirname, '..', '..', 'public', 'admin'));
+const adminStatic = express.static(path.join(__dirname, '..', '..', 'public', 'admin'), {
+  setHeaders: (res, filePath) => {
+    // 禁用 JS/CSS 缓存，确保前端更新立即生效
+    if (filePath.endsWith('.js') || filePath.endsWith('.css')) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+    }
+  }
+});
 
 // 登录页仍需访问的公共静态资源（如样式、主题脚本），不应被登录保护拦截
 const publicAdminAssets = new Set(['/auth.css', '/panel.css', '/theme.js']);
