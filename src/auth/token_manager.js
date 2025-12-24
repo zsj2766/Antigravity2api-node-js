@@ -18,16 +18,41 @@ class TokenManager {
     this.filePath = filePath;
     this.tokens = [];
     this.currentIndex = 0;
-    this.hourlyLimit = Number.isFinite(Number(config.credentials?.maxUsagePerHour))
-      ? Number(config.credentials.maxUsagePerHour)
-      : 20;
-    this.cooldownMs = 5 * 60 * 1000; // 429 错误后冷却 5 分钟
     this.tokenStats = new Map(); // 凭证统计
+
+    // 负载均衡状态
+    this.stickyTokenId = null;
+    this.stickyUsageCount = 0;
+
+    // 用量缓存配置
+    this.usageCache = new Map();
+    this.USAGE_CACHE_TTL = 10000; // 10秒缓存
+
+    this.updateConfig();
     this.initialize();
   }
 
+  updateConfig() {
+    this.hourlyLimit = Number.isFinite(Number(config.credentials?.maxUsagePerHour))
+      ? Number(config.credentials.maxUsagePerHour)
+      : 20;
+    this.cooldownMs = Number.isFinite(Number(config.credentials?.cooldownMs))
+      ? Number(config.credentials.cooldownMs)
+      : 5 * 60 * 1000;
+    this.MAX_STICKY_USAGE = Number.isFinite(Number(config.credentials?.maxStickyUsage))
+      ? Number(config.credentials.maxStickyUsage)
+      : 5;
+    this.POOL_SIZE = Number.isFinite(Number(config.credentials?.poolSize))
+      ? Number(config.credentials.poolSize)
+      : 3;
+  }
+
+  getTokenKey(token) {
+    return token.projectId || token.access_token;
+  }
+
   getStats(token) {
-    const key = token.projectId || token.access_token;
+    const key = this.getTokenKey(token);
     if (!this.tokenStats.has(key)) {
       this.tokenStats.set(key, { lastUsed: 0, lastFailure: 0, failureCount: 0, successCount: 0 });
     }
@@ -48,49 +73,19 @@ class TokenManager {
     if (statusCode === 429) {
       stats.lastFailure = Date.now();
     }
+
+    // 失败时重置粘性会话
+    const key = this.getTokenKey(token);
+    if (this.stickyTokenId === key) {
+      this.stickyTokenId = null;
+      this.stickyUsageCount = 0;
+    }
   }
 
   isInCooldown(token) {
     const stats = this.getStats(token);
     if (stats.lastFailure === 0) return false;
     return Date.now() - stats.lastFailure < this.cooldownMs;
-  }
-
-  calculateScore(token) {
-    const stats = this.getStats(token);
-    const now = Date.now();
-    let score = 100;
-
-    if (this.isInCooldown(token)) score -= 80;
-
-    const idleMinutes = (now - stats.lastUsed) / 60000;
-    score += Math.min(idleMinutes, 20);
-
-    score -= stats.failureCount * 10;
-
-    const total = stats.successCount + stats.failureCount;
-    if (total > 0) {
-      score += (stats.successCount / total) * 10;
-    }
-
-    return score;
-  }
-
-  async getNextAvailableToken(excludeIds = new Set()) {
-    if (this.tokens.length === 0) return null;
-
-    const available = this.tokens.filter(t =>
-      !excludeIds.has(t.projectId || t.access_token) && t.enable !== false
-    );
-
-    if (available.length === 0) return null;
-
-    const notInCooldown = available.filter(t => !this.isInCooldown(t));
-    const candidates = notInCooldown.length > 0 ? notInCooldown : available;
-
-    candidates.sort((a, b) => this.calculateScore(b) - this.calculateScore(a));
-
-    return this.prepareToken(candidates[0]);
   }
 
   async prepareToken(token) {
@@ -141,11 +136,26 @@ class TokenManager {
     this.hourlyLimit = Number(limit);
   }
 
+  reloadConfig() {
+    this.updateConfig();
+  }
+
   isWithinHourlyLimit(token) {
     if (!this.hourlyLimit || Number.isNaN(this.hourlyLimit)) return true;
 
-    const oneHourAgo = Date.now() - 60 * 60 * 1000;
-    const usage = getUsageCountSince(token.projectId, oneHourAgo);
+    const now = Date.now();
+    const cacheKey = token.projectId;
+    let usage;
+
+    // 检查缓存
+    const cached = this.usageCache.get(cacheKey);
+    if (cached && (now - cached.timestamp < this.USAGE_CACHE_TTL)) {
+      usage = cached.count;
+    } else {
+      const oneHourAgo = now - 60 * 60 * 1000;
+      usage = getUsageCountSince(token.projectId, oneHourAgo);
+      this.usageCache.set(cacheKey, { count: usage, timestamp: now });
+    }
 
     if (usage >= this.hourlyLimit) {
       log.warn(
@@ -278,48 +288,77 @@ class TokenManager {
     this.currentIndex = this.currentIndex % Math.max(this.tokens.length, 1);
   }
 
-  async getToken() {
+  async getToken(excludeIds = new Set()) {
     if (this.tokens.length === 0) return null;
 
-    // 使用评分系统选择最佳凭证
-    const enabledTokens = this.tokens.filter(t => t.enable !== false);
-    if (enabledTokens.length === 0) return null;
+    // 1. 过滤可用凭证 (Enabled + Not Cooldown + Within Limit + Not Excluded)
+    const usableTokens = this.tokens.filter(t =>
+      t.enable !== false &&
+      !this.isInCooldown(t) &&
+      this.isWithinHourlyLimit(t) &&
+      !excludeIds.has(this.getTokenKey(t))
+    );
 
-    // 优先选择不在冷却期且符合小时限制的凭证
-    const candidates = enabledTokens
-      .filter(t => !this.isInCooldown(t) && this.isWithinHourlyLimit(t));
+    // 兜底：如果没有完全符合条件的凭证，尝试使用仅受限但未禁用且未排除的凭证
+    if (usableTokens.length === 0) {
+      const fallbackTokens = this.tokens.filter(t =>
+        t.enable !== false && !excludeIds.has(this.getTokenKey(t))
+      );
+      if (fallbackTokens.length === 0) return null;
 
-    if (candidates.length > 0) {
-      candidates.sort((a, b) => this.calculateScore(b) - this.calculateScore(a));
-      return this.prepareToken(candidates[0]);
+      // 兜底策略：按 LRU 排序（优先使用最久未使用的）
+      log.warn('所有凭证均已冷却或超限，使用兜底策略选择最久未使用的凭证');
+      fallbackTokens.sort((a, b) => this.getStats(a).lastUsed - this.getStats(b).lastUsed);
+      return this.prepareToken(fallbackTokens[0]);
     }
 
-    // 如果所有凭证都在冷却或超限，选择评分最高的
-    enabledTokens.sort((a, b) => this.calculateScore(b) - this.calculateScore(a));
-    return this.prepareToken(enabledTokens[0]);
-  }
-
-  async getTokenByProjectId(projectId) {
-    if (!projectId || this.tokens.length === 0) return null;
-
-    const token = this.tokens.find(t => t.projectId === projectId && t.enable !== false);
-    if (!token) return null;
-
-    try {
-      if (this.isExpired(token)) {
-        await this.refreshToken(token);
+    // 2. 连续调用保护 (Sticky Session)
+    // 只有当 stickyToken 未被排除时才使用
+    if (this.stickyTokenId && this.stickyUsageCount < this.MAX_STICKY_USAGE) {
+      if (!excludeIds.has(this.stickyTokenId)) {
+        const stickyToken = usableTokens.find(t => this.getTokenKey(t) === this.stickyTokenId);
+        if (stickyToken) {
+          this.stickyUsageCount++;
+          return this.prepareToken(stickyToken);
+        }
       }
-      return token;
-    } catch (error) {
-      if (error.statusCode === 403 || error.statusCode === 400) {
-        log.warn(`账号 ${projectId}: Token 已失效或错误，已自动禁用该账号`);
-        this.disableToken(token);
-        return null;
-      }
-
-      log.error(`Token ${projectId} 刷新失败:`, error.message);
-      return null;
     }
+
+    // 3. 负载均衡策略 (LRU + Weighted Random)
+
+    // 按最后使用时间排序 (LRU)，最久未使用的在前
+    usableTokens.sort((a, b) => this.getStats(a).lastUsed - this.getStats(b).lastUsed);
+
+    // 选取候选池 (Top N)
+    const poolSize = Math.min(usableTokens.length, this.POOL_SIZE);
+    const candidates = usableTokens.slice(0, poolSize);
+
+    // 加权随机选择 (权重 = 空闲时间)
+    const now = Date.now();
+    const candidatesWithWeights = candidates.map(token => {
+      const stats = this.getStats(token);
+      const idleTime = Math.max(0, now - stats.lastUsed);
+      // 基础权重 1000ms，避免刚使用过的权重为 0
+      return { token, weight: idleTime + 1000 };
+    });
+
+    const totalWeight = candidatesWithWeights.reduce((sum, item) => sum + item.weight, 0);
+    let randomValue = Math.random() * totalWeight;
+    let selectedToken = candidatesWithWeights[0].token;
+
+    for (const item of candidatesWithWeights) {
+      randomValue -= item.weight;
+      if (randomValue <= 0) {
+        selectedToken = item.token;
+        break;
+      }
+    }
+
+    // 更新粘性会话状态
+    this.stickyTokenId = this.getTokenKey(selectedToken);
+    this.stickyUsageCount = 1;
+
+    return this.prepareToken(selectedToken);
   }
 
   disableCurrentToken(token) {

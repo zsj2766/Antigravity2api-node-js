@@ -1035,6 +1035,7 @@ button:disabled {
 
 .log-success { background: var(--log-success-bg); border-color: var(--log-success-border); }
 .log-fail { background: var(--log-fail-bg); border-color: var(--log-fail-border); }
+.log-retry { background: var(--chip-warning-bg); border-color: var(--chip-warning-border); }
 
 .log-content {
   display: flex;
@@ -1268,6 +1269,137 @@ button:disabled {
 .pagination-controls {
   display: flex;
   gap: 8px;
+}
+
+/* 负载均衡策略信息框 */
+.strategy-info-box {
+  background: var(--subtle-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 20px;
+}
+
+.strategy-info-box h3 {
+  margin: 0 0 12px;
+  font-size: 15px;
+  color: var(--text);
+}
+
+.strategy-rules {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 8px;
+}
+
+.strategy-rules span {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+  padding: 6px 10px;
+  background: var(--card-bg);
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+
+.strategy-rules strong {
+  color: var(--text);
+}
+
+/* 凭证额度网格列表 */
+.quota-grid-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.quota-placeholder {
+  grid-column: 1 / -1;
+  text-align: center;
+  color: var(--muted);
+  padding: 24px;
+  font-size: 14px;
+}
+
+.quota-card-mini {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.quota-card-mini:hover {
+  border-color: var(--accent-border);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.quota-card-mini.expanded {
+  grid-column: 1 / -1;
+}
+
+.quota-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.quota-card-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quota-card-badges {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.quota-card-content {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  display: none;
+}
+
+.quota-card-mini.expanded .quota-card-content {
+  display: block;
+}
+
+.quota-loading-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  text-align: center;
+}
+
+.quota-loading-bar {
+  width: 100%;
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.quota-loading-fill {
+  height: 100%;
+  background: var(--button-bg);
+  transition: width 0.3s ease;
+}
+
+.quota-loading-text {
+  font-size: 12px;
+  color: var(--muted);
 }
 
 @media (max-width: 640px) {

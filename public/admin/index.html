@@ -141,23 +141,27 @@
         <div>
           <div class="eyebrow">步骤 3</div>
           <h2>凭证用量</h2>
-          <p>只显示有调用记录的凭证，按最近使用排序，并展示最近一小时的限额进度及累计调用数据。</p>
+          <p>查看凭证的额度状态、评分情况及每小时调用统计。</p>
         </div>
-        <button id="usageRefreshBtn" class="refresh-btn">🔄 刷新用量</button>
+        <button id="usageRefreshBtn" class="refresh-btn">🔄 刷新数据</button>
       </div>
+
+      <div class="strategy-info-box">
+        <h3>⚖️ 智能负载均衡策略 (Smart Load Balancing)</h3>
+        <div class="strategy-rules">
+          <span><strong>过滤规则:</strong> 排除冷却中 / 超限 / 已禁用凭证</span>
+          <span><strong>选择策略:</strong> 最久未使用 (LRU) Top 3 + 空闲时间加权随机</span>
+          <span><strong>连续保护:</strong> 成功调用后锁定 5 次 (Sticky Session)</span>
+          <span><strong>冷却机制:</strong> 429 错误自动冷却 5 分钟</span>
+          <span><strong>流量限制:</strong> 默认 20 次/小时/凭证</span>
+        </div>
+      </div>
+
       <div class="status-row">
         <span id="usageStatus" class="badge" style="display:none;"></span>
       </div>
 
       <div class="overview-card">
-        <div class="overview-item">
-          <div class="overview-icon">🎲</div>
-          <div class="overview-content">
-            <div class="overview-label">轮询规则</div>
-            <div class="overview-value">智能加权</div>
-            <div class="overview-desc">综合评分：冷却状态、空闲时间、失败次数、成功率</div>
-          </div>
-        </div>
         <div class="overview-item">
           <div class="overview-icon">⏭️</div>
           <div class="overview-content">
@@ -183,11 +187,25 @@
         <div class="log-usage-head">
           <div>
             <div class="eyebrow">每小时用量</div>
-            <h3>默认凭证 20 次 / 小时 限额，可以前往设置修改</h3>
+            <h3>调用频率统计</h3>
             <p>按浏览器时区计算当前小时的调用占比。</p>
           </div>
         </div>
         <div id="hourlyUsage" class="log-usage-list">加载中...</div>
+      </div>
+
+      <div class="log-usage-card" style="margin-top: 16px;">
+        <div class="log-usage-head" style="display: flex; justify-content: space-between; align-items: flex-start;">
+          <div>
+            <div class="eyebrow">详细额度</div>
+            <h3>凭证每日额度详情</h3>
+            <p>实时从 Google 查询最新额度（耗时较长）。</p>
+          </div>
+          <button id="loadAllQuotasBtn" class="mini-btn">📥 加载所有额度</button>
+        </div>
+        <div id="allQuotasList" class="quota-grid-list">
+          <div class="quota-placeholder">点击上方按钮加载数据</div>
+        </div>
       </div>
     </section>
 

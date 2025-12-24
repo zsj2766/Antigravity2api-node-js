@@ -244,81 +244,6 @@ async function extractErrorDetails(error) {
     };
 }
 
-function delay(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-async function withRetry(operationFactory, initialToken) {
-    const retryStatusCodes = config.retry?.statusCodes?.length
-        ? config.retry.statusCodes
-        : [429, 500, 503, 502];
-    const maxAttemptsPerToken = 2;
-
-    let currentToken = initialToken;
-    let tokenAttempts = 0;
-    const triedTokenIds = new Set([currentToken.projectId || currentToken.access_token]);
-    let lastError = null;
-
-    log.info(`[withRetry] 开始请求，可重试状态码=${retryStatusCodes.join(',')}, 凭证数量=${tokenManager.tokens.length}`);
-
-    while (true) {
-        try {
-            const result = await operationFactory(currentToken);
-            tokenManager.recordSuccess(currentToken);
-            return result;
-        } catch (error) {
-            lastError = error;
-            const details = await extractErrorDetails(error);
-
-            log.warn(`[withRetry] 请求失败，status=${details.status}, 当前凭证尝试次数=${tokenAttempts}, 已尝试凭证数=${triedTokenIds.size}`);
-
-            if (details.disableToken || details.status === 401) {
-                log.warn(`[withRetry] 凭证需要禁用 (status=${details.status})`);
-                tokenManager.disableCurrentToken(currentToken);
-
-                const nextToken = await tokenManager.getNextAvailableToken(triedTokenIds);
-                if (!nextToken) {
-                    log.error('[withRetry] 没有可用的凭证了');
-                    throw error;
-                }
-                triedTokenIds.add(nextToken.projectId || nextToken.access_token);
-                currentToken = nextToken;
-                tokenAttempts = 0;
-                continue;
-            }
-
-            const shouldRetry = retryStatusCodes.includes(details.status);
-            if (!shouldRetry) {
-                log.warn(`[withRetry] 状态码 ${details.status} 不在重试列表中`);
-                throw error;
-            }
-
-            tokenAttempts += 1;
-            tokenManager.recordFailure(currentToken, details.status);
-
-            if (tokenAttempts >= maxAttemptsPerToken) {
-                log.info(`[withRetry] 当前凭证已重试${tokenAttempts}次，尝试切换凭证...`);
-
-                const nextToken = await tokenManager.getNextAvailableToken(triedTokenIds);
-                if (!nextToken) {
-                    log.error(`[withRetry] 所有${triedTokenIds.size}个凭证都已尝试过，仍然失败`);
-                    throw error;
-                }
-
-                triedTokenIds.add(nextToken.projectId || nextToken.access_token);
-                currentToken = nextToken;
-                tokenAttempts = 0;
-                log.info(`[withRetry] 已切换到新凭证 (已尝试${triedTokenIds.size}个凭证)`);
-                continue;
-            }
-
-            const delayMs = details.retryDelayMs ?? Math.min(1000 * tokenAttempts, 5000);
-            log.info(`[withRetry] ${details.status}错误，等待${delayMs}ms后重试`);
-            await delay(delayMs);
-        }
-    }
-}
-
 // 统一错误处理
 async function handleApiError(error, token) {
     const details = await extractErrorDetails(error);
@@ -462,19 +387,19 @@ export async function generateAssistantResponse(requestBody, token, callback) {
     };
 
     try {
-        await withRequesterFallback(async currentUseAxios => withRetry(async (currentToken) => {
-            const headers = buildHeaders(currentToken);
-            buffer = ''; // 重置缓冲区以防重试
+        await withRequesterFallback(async currentUseAxios => {
+            const headers = buildHeaders(token);
+            buffer = ''; // 重置缓冲区
             const attemptStartTime = Date.now();
 
-            // 记录每次请求（包括重试）
+            // 记录请求
             log.backend({
                 type: 'request',
                 url: config.api.url,
                 method: 'POST',
                 headers,
                 body: requestBody,
-                tokenId: currentToken.projectId || currentToken.access_token?.slice(-8)
+                tokenId: token.projectId || token.access_token?.slice(-8)
             });
 
             try {
@@ -493,7 +418,7 @@ export async function generateAssistantResponse(requestBody, token, callback) {
                         type: 'response',
                         status: 200,
                         durationMs: Date.now() - attemptStartTime,
-                        tokenId: currentToken.projectId || currentToken.access_token?.slice(-8)
+                        tokenId: token.projectId || token.access_token?.slice(-8)
                     });
                     return;
                 }
@@ -514,7 +439,7 @@ export async function generateAssistantResponse(requestBody, token, callback) {
                                     status: statusCode,
                                     durationMs: Date.now() - attemptStartTime,
                                     body: errorBody,
-                                    tokenId: currentToken.projectId || currentToken.access_token?.slice(-8)
+                                    tokenId: token.projectId || token.access_token?.slice(-8)
                                 });
                                 reject({ status: statusCode, message: errorBody });
                             } else {
@@ -523,7 +448,7 @@ export async function generateAssistantResponse(requestBody, token, callback) {
                                     type: 'response',
                                     status: 200,
                                     durationMs: Date.now() - attemptStartTime,
-                                    tokenId: currentToken.projectId || currentToken.access_token?.slice(-8)
+                                    tokenId: token.projectId || token.access_token?.slice(-8)
                                 });
                                 resolve();
                             }
@@ -534,7 +459,7 @@ export async function generateAssistantResponse(requestBody, token, callback) {
                                 status: 'Error',
                                 durationMs: Date.now() - attemptStartTime,
                                 body: err?.message || err,
-                                tokenId: currentToken.projectId || currentToken.access_token?.slice(-8)
+                                tokenId: token.projectId || token.access_token?.slice(-8)
                             });
                             reject(err);
                         });
@@ -547,13 +472,17 @@ export async function generateAssistantResponse(requestBody, token, callback) {
                         status: error?.response?.status || 'Error',
                         durationMs: Date.now() - attemptStartTime,
                         body: error?.message || error,
-                        tokenId: currentToken.projectId || currentToken.access_token?.slice(-8)
+                        tokenId: token.projectId || token.access_token?.slice(-8)
                     });
                 }
                 throw error;
             }
-        }, token));
+        });
     } catch (error) {
+        // 尝试解析内嵌的 API 错误（例如 429 隐藏在 500 响应体中）
+        if (error.status && error.message && typeof error.message === 'string') {
+            await handleApiError(error, token);
+        }
         throw error;
     }
 
@@ -564,17 +493,17 @@ export async function getAvailableModels() {
     const token = await tokenManager.getToken();
     if (!token) throw new Error('没有可用的token，请运行 npm run login 获取token');
 
-    const data = await withRequesterFallback(async currentUseAxios => withRetry(async (currentToken) => {
-        const currentHeaders = buildHeaders(currentToken);
+    const data = await withRequesterFallback(async currentUseAxios => {
+        const headers = buildHeaders(token);
         const attemptStartTime = Date.now();
-        const tokenId = currentToken.projectId || currentToken.access_token?.slice(-8);
+        const tokenId = token.projectId || token.access_token?.slice(-8);
 
-        // 记录每次请求（包括重试）
+        // 记录请求
         log.backend({
             type: 'request',
             url: config.api.modelsUrl,
             method: 'POST',
-            headers: currentHeaders,
+            headers,
             body: {},
             tokenId
         });
@@ -582,9 +511,9 @@ export async function getAvailableModels() {
         try {
             let responseData;
             if (currentUseAxios) {
-                responseData = (await axios(buildAxiosConfig(config.api.modelsUrl, currentHeaders, {}))).data;
+                responseData = (await axios(buildAxiosConfig(config.api.modelsUrl, headers, {}))).data;
             } else {
-                const response = await requester.antigravity_fetch(config.api.modelsUrl, buildRequesterConfig(currentHeaders, {}));
+                const response = await requester.antigravity_fetch(config.api.modelsUrl, buildRequesterConfig(headers, {}));
                 const bodyText = await response.text();
                 const embeddedError = detectEmbeddedError(bodyText);
 
@@ -620,7 +549,7 @@ export async function getAvailableModels() {
             });
             throw error;
         }
-    }, token));
+    });
 
     return {
         object: 'list',
@@ -635,68 +564,66 @@ export async function getAvailableModels() {
 
 // 内部复用的非流式请求封装，返回上游原始 JSON，方便不同上层按需解析
 async function callNoStreamApi(requestBody, token) {
-    return await withRequesterFallback(async currentUseAxios =>
-        withRetry(async (currentToken) => {
-            const currentHeaders = buildHeaders(currentToken);
-            const attemptStartTime = Date.now();
-            const tokenId = currentToken.projectId || currentToken.access_token?.slice(-8);
+    return await withRequesterFallback(async currentUseAxios => {
+        const headers = buildHeaders(token);
+        const attemptStartTime = Date.now();
+        const tokenId = token.projectId || token.access_token?.slice(-8);
 
-            // 记录每次请求（包括重试）
+        // 记录请求
+        log.backend({
+            type: 'request',
+            url: config.api.noStreamUrl,
+            method: 'POST',
+            headers,
+            body: requestBody,
+            tokenId
+        });
+
+        try {
+            let responseData;
+            if (currentUseAxios) {
+                responseData = (await axios(buildAxiosConfig(config.api.noStreamUrl, headers, requestBody))).data;
+            } else {
+                const response = await requester.antigravity_fetch(
+                    config.api.noStreamUrl,
+                    buildRequesterConfig(headers, requestBody)
+                );
+                const bodyText = await response.text();
+                const embeddedError = detectEmbeddedError(bodyText);
+
+                if (response.status !== 200 || embeddedError) {
+                    throw {
+                        status: embeddedError?.status ?? response.status,
+                        message: embeddedError?.message ?? bodyText,
+                        retryDelayMs: embeddedError?.retryDelayMs,
+                        disableToken: embeddedError?.disableToken
+                    };
+                }
+
+                responseData = JSON.parse(bodyText);
+            }
+
+            // 记录成功响应
             log.backend({
-                type: 'request',
-                url: config.api.noStreamUrl,
-                method: 'POST',
-                headers: currentHeaders,
-                body: requestBody,
+                type: 'response',
+                status: 200,
+                durationMs: Date.now() - attemptStartTime,
                 tokenId
             });
 
-            try {
-                let responseData;
-                if (currentUseAxios) {
-                    responseData = (await axios(buildAxiosConfig(config.api.noStreamUrl, currentHeaders, requestBody))).data;
-                } else {
-                    const response = await requester.antigravity_fetch(
-                        config.api.noStreamUrl,
-                        buildRequesterConfig(currentHeaders, requestBody)
-                    );
-                    const bodyText = await response.text();
-                    const embeddedError = detectEmbeddedError(bodyText);
-
-                    if (response.status !== 200 || embeddedError) {
-                        throw {
-                            status: embeddedError?.status ?? response.status,
-                            message: embeddedError?.message ?? bodyText,
-                            retryDelayMs: embeddedError?.retryDelayMs,
-                            disableToken: embeddedError?.disableToken
-                        };
-                    }
-
-                    responseData = JSON.parse(bodyText);
-                }
-
-                // 记录成功响应
-                log.backend({
-                    type: 'response',
-                    status: 200,
-                    durationMs: Date.now() - attemptStartTime,
-                    tokenId
-                });
-
-                return responseData;
-            } catch (error) {
-                // 记录失败响应
-                log.backend({
-                    type: 'response',
-                    status: error?.status || error?.response?.status || 'Error',
-                    durationMs: Date.now() - attemptStartTime,
-                    body: error?.message || error,
-                    tokenId
-                });
-                throw error;
-            }
-        }, token)
-    );
+            return responseData;
+        } catch (error) {
+            // 记录失败响应
+            log.backend({
+                type: 'response',
+                status: error?.status || error?.response?.status || 'Error',
+                durationMs: Date.now() - attemptStartTime,
+                body: error?.message || error,
+                tokenId
+            });
+            throw error;
+        }
+    });
 }
 
 export async function generateAssistantResponseNoStream(requestBody, token) {

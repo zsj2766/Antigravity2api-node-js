@@ -120,7 +120,13 @@ function loadConfigFromEnv() {
     },
     credentials: {
       maxUsagePerHour:
-        parseInt(flat.CREDENTIAL_MAX_USAGE_PER_HOUR, 10) || 20
+        parseInt(flat.CREDENTIAL_MAX_USAGE_PER_HOUR, 10) || 20,
+      maxStickyUsage:
+        parseInt(flat.CREDENTIAL_MAX_STICKY_USAGE, 10) || 5,
+      poolSize:
+        parseInt(flat.CREDENTIAL_POOL_SIZE, 10) || 3,
+      cooldownMs:
+        parseInt(flat.CREDENTIAL_COOLDOWN_MS, 10) || 300000
     },
     retry: {
       statusCodes: (flat.RETRY_STATUS_CODES || '429,500')

@@ -31,6 +31,8 @@ const tabButtons = document.querySelectorAll('.tab-btn');
 const tabPanels = document.querySelectorAll('.tab-panel');
 const deleteDisabledBtn = document.getElementById('deleteDisabledBtn');
 const usageRefreshBtn = document.getElementById('usageRefreshBtn');
+const loadAllQuotasBtn = document.getElementById('loadAllQuotasBtn');
+const allQuotasList = document.getElementById('allQuotasList');
 const paginationInfo = document.getElementById('paginationInfo');
 const prevPageBtn = document.getElementById('prevPageBtn');
 const nextPageBtn = document.getElementById('nextPageBtn');
@@ -48,6 +50,12 @@ const PAGE_SIZE = 5;
 let accountsData = [];
 let tokenRuntimeStats = {};
 let tokenCooldownMs = 5 * 60 * 1000; // 默认5分钟，从后端动态更新
+let tokenConfig = {
+  cooldownMs: 300000,
+  maxStickyUsage: 5,
+  poolSize: 3,
+  hourlyLimit: 20
+};
 let filteredAccounts = [];
 let currentPage = 1;
 const LOG_PAGE_SIZE = 20;
@@ -128,9 +136,29 @@ async function loadTokenRuntimeStats() {
     if (data.cooldownMs) {
       tokenCooldownMs = data.cooldownMs;
     }
+    // 更新配置
+    if (data.config) {
+      tokenConfig = { ...tokenConfig, ...data.config };
+      updateStrategyDisplay();
+    }
   } catch (e) {
     console.error('加载运行时统计失败:', e);
   }
+}
+
+function updateStrategyDisplay() {
+  const rulesEl = document.querySelector('.strategy-rules');
+  if (!rulesEl) return;
+
+  const cooldownMinutes = Math.round(tokenConfig.cooldownMs / 60000);
+
+  rulesEl.innerHTML = `
+    <span><strong>过滤规则:</strong> 排除冷却中 / 超限 / 已禁用凭证</span>
+    <span><strong>选择策略:</strong> 最久未使用 (LRU) Top ${tokenConfig.poolSize} + 空闲时间加权随机</span>
+    <span><strong>连续保护:</strong> 成功调用后锁定 ${tokenConfig.maxStickyUsage} 次 (Sticky Session)</span>
+    <span><strong>冷却机制:</strong> 429 错误自动冷却 ${cooldownMinutes} 分钟</span>
+    <span><strong>流量限制:</strong> 默认 ${tokenConfig.hourlyLimit} 次/小时/凭证</span>
+  `;
 }
 
 function renderUsageCard(account) {
@@ -144,15 +172,13 @@ function renderUsageCard(account) {
     lastFailure: 0,
     failureCount: 0,
     successCount: 0,
-    score: 100,
     inCooldown: false
   };
-
-  const scoreClass = stats.score >= 80 ? 'score-high' : stats.score >= 50 ? 'score-medium' : 'score-low';
 
   // 计算成功率
   const totalReqs = stats.successCount + stats.failureCount;
   const successRate = totalReqs > 0 ? Math.round((stats.successCount / totalReqs) * 100) : 100;
+  const rateClass = successRate >= 80 ? 'score-high' : successRate >= 50 ? 'score-medium' : 'score-low';
 
   // 冷却倒计时
   let cooldownHtml = '';
@@ -165,7 +191,7 @@ function renderUsageCard(account) {
   return `
     <div class="usage">
       <div class="stats-header">
-        <div class="score-badge ${scoreClass}">评分: ${Math.round(stats.score)}</div>
+        <div class="score-badge ${rateClass}">成功率: ${successRate}%</div>
         ${cooldownHtml}
       </div>
       <div class="usage-row"><span>累计调用</span><strong>${usage.total || 0}</strong></div>
@@ -1032,13 +1058,15 @@ function renderLogs() {
   logsEl.innerHTML = pageItems
     .map((log, idx) => {
       const time = log.timestamp ? new Date(log.timestamp).toLocaleString() : '未知时间';
-      const cls = log.success ? 'log-success' : 'log-fail';
+      const isRetry = log.isRetry === true;
+      const cls = log.success ? 'log-success' : (isRetry ? 'log-retry' : 'log-fail');
       const hasError = !log.success;
       const detailId = `log-detail-${start + idx}`;
       const errorDetailId = `log-error-${start + idx}`;
       const statusText = log.status ? `HTTP ${log.status}` : log.success ? '成功' : '失败';
       const durationText = log.durationMs ? `${log.durationMs} ms` : '未知耗时';
       const pathText = `${log.method || '未知方法'} ${log.path || log.route || '未知路径'}`;
+      const retryBadge = isRetry ? `<span class="chip chip-warning">重试 #${log.retryCount || 1}</span>` : '';
       const errorHint = hasError && log.message ? `<div class="log-error-hint">失败原因：${escapeHtml(log.message)}</div>` : '';
       const detailButton =
         log.hasDetail && log.id
@@ -1055,7 +1083,7 @@ function renderLogs() {
       return `
         <div class="log-item ${cls}">
           <div class="log-content">
-            <div class="log-time">${time}</div>
+            <div class="log-time">${time} ${retryBadge}</div>
             <div class="log-meta">
               模型：${log.model || '未知模型'} |
               项目：${log.projectId || '未知项目'}
@@ -1067,7 +1095,7 @@ function renderLogs() {
             ${errorButton}
             ${detailButton}
           </div>
-          <div class="log-status">${log.success ? '成功' : '失败'}</div>
+          <div class="log-status">${log.success ? '成功' : (isRetry ? '重试中' : '失败')}</div>
         </div>
       `;
     })
@@ -1184,10 +1212,13 @@ async function loadGlobalOverview() {
     const candidates = accountsData
       .filter(acc => acc.enable)
       .map(acc => {
-        const stats = tokenRuntimeStats[acc.projectId] || { score: 100, inCooldown: false };
+        const stats = tokenRuntimeStats[acc.projectId] || { successCount: 0, failureCount: 0, lastUsed: 0, inCooldown: false };
+        const total = stats.successCount + stats.failureCount;
+        const successRate = total > 0 ? Math.round((stats.successCount / total) * 100) : 100;
         return {
           ...acc,
-          score: stats.score,
+          successRate,
+          lastUsed: stats.lastUsed || 0,
           inCooldown: stats.inCooldown
         };
       });
@@ -1196,10 +1227,10 @@ async function loadGlobalOverview() {
       nextTokenDisplay.textContent = '无可用凭证';
       nextTokenDesc.textContent = '请先添加或启用凭证';
     } else {
-      // 模拟后端的排序逻辑：优先未冷却，其次按分数高低
+      // 模拟后端的排序逻辑：优先未冷却，其次按 LRU（最久未使用的优先）
       candidates.sort((a, b) => {
         if (a.inCooldown !== b.inCooldown) return a.inCooldown ? 1 : -1;
-        return b.score - a.score;
+        return a.lastUsed - b.lastUsed; // LRU: 最久未使用的在前
       });
 
       const best = candidates[0];
@@ -1207,7 +1238,7 @@ async function loadGlobalOverview() {
       nextTokenDisplay.textContent = displayName;
       nextTokenDisplay.title = displayName;
 
-      let statusText = `评分: ${Math.round(best.score)}`;
+      let statusText = `成功率: ${best.successRate}%`;
       if (best.inCooldown) statusText += ' (冷却中)';
       nextTokenDesc.textContent = statusText;
     }
@@ -1226,29 +1257,30 @@ async function loadGlobalOverview() {
       globalQuotaBar.style.width = '0%';
       globalQuotaDesc.textContent = '请先添加凭证';
     } else {
-      // 统计凭证健康度（基于运行时统计）
-      let totalScore = 0;
+      // 统计凭证健康度（基于成功率）
+      let totalSuccessRate = 0;
       let validCount = 0;
       accountsData.filter(acc => acc.enable).forEach(acc => {
         const stats = tokenRuntimeStats[acc.projectId];
-        if (stats && typeof stats.score === 'number') {
-          totalScore += stats.score;
+        if (stats) {
+          const total = stats.successCount + stats.failureCount;
+          const rate = total > 0 ? (stats.successCount / total) * 100 : 100;
+          totalSuccessRate += rate;
           validCount++;
         }
       });
 
       if (validCount > 0) {
-        const avgScore = Math.round(totalScore / validCount);
-        const healthPercent = Math.min(100, Math.max(0, avgScore));
-        globalQuotaValue.textContent = `${healthPercent}分`;
-        globalQuotaBar.style.width = `${healthPercent}%`;
+        const avgRate = Math.round(totalSuccessRate / validCount);
+        globalQuotaValue.textContent = `${avgRate}%`;
+        globalQuotaBar.style.width = `${avgRate}%`;
 
         // 颜色指示
-        if (healthPercent > 80) globalQuotaBar.style.backgroundColor = '#10b981';
-        else if (healthPercent > 50) globalQuotaBar.style.backgroundColor = '#f59e0b';
+        if (avgRate > 80) globalQuotaBar.style.backgroundColor = '#10b981';
+        else if (avgRate > 50) globalQuotaBar.style.backgroundColor = '#f59e0b';
         else globalQuotaBar.style.backgroundColor = '#ef4444';
 
-        globalQuotaDesc.textContent = `${enabledCount}/${totalCount} 个凭证启用，平均健康度`;
+        globalQuotaDesc.textContent = `${enabledCount}/${totalCount} 个凭证启用，平均成功率`;
       } else {
         globalQuotaValue.textContent = `${enabledCount}/${totalCount}`;
         globalQuotaBar.style.width = '100%';
@@ -1496,9 +1528,139 @@ if (usageRefreshBtn) {
     } catch (e) {
       setStatus('刷新用量失败: ' + e.message, 'error', usageStatusEl);
     } finally {
-      usageRefreshBtn.textContent = '🔄 刷新用量';
+      usageRefreshBtn.textContent = '🔄 刷新数据';
       usageRefreshBtn.disabled = false;
     }
+  });
+}
+
+if (loadAllQuotasBtn) {
+  loadAllQuotasBtn.addEventListener('click', loadAllQuotas);
+}
+
+async function loadAllQuotas() {
+  if (!allQuotasList || !accountsData.length) {
+    if (allQuotasList) {
+      allQuotasList.innerHTML = '<div class="quota-placeholder">暂无凭证，请先添加账号</div>';
+    }
+    return;
+  }
+
+  const enabledAccounts = accountsData.filter(acc => acc.enable !== false);
+  if (enabledAccounts.length === 0) {
+    allQuotasList.innerHTML = '<div class="quota-placeholder">暂无启用的凭证</div>';
+    return;
+  }
+
+  // 显示加载进度
+  allQuotasList.innerHTML = `
+    <div class="quota-loading-progress">
+      <div class="quota-loading-bar">
+        <div class="quota-loading-fill" id="quotaLoadingFill" style="width: 0%"></div>
+      </div>
+      <div class="quota-loading-text" id="quotaLoadingText">正在加载 0/${enabledAccounts.length} 个凭证的额度...</div>
+    </div>
+  `;
+
+  if (loadAllQuotasBtn) {
+    loadAllQuotasBtn.disabled = true;
+    loadAllQuotasBtn.textContent = '加载中...';
+  }
+
+  const quotaResults = [];
+  const loadingFill = document.getElementById('quotaLoadingFill');
+  const loadingText = document.getElementById('quotaLoadingText');
+
+  for (let i = 0; i < enabledAccounts.length; i++) {
+    const acc = enabledAccounts[i];
+    try {
+      const data = await fetchJson(`/admin/tokens/${acc.index}/quotas`, { cache: 'no-store' });
+      quotaResults.push({
+        account: acc,
+        quota: data.data,
+        error: null
+      });
+    } catch (e) {
+      quotaResults.push({
+        account: acc,
+        quota: null,
+        error: e.message
+      });
+    }
+
+    // 更新进度
+    const progress = Math.round(((i + 1) / enabledAccounts.length) * 100);
+    if (loadingFill) loadingFill.style.width = `${progress}%`;
+    if (loadingText) loadingText.textContent = `正在加载 ${i + 1}/${enabledAccounts.length} 个凭证的额度...`;
+  }
+
+  // 渲染结果
+  renderAllQuotas(quotaResults);
+
+  if (loadAllQuotasBtn) {
+    loadAllQuotasBtn.disabled = false;
+    loadAllQuotasBtn.textContent = '📥 加载所有额度';
+  }
+}
+
+function renderAllQuotas(results) {
+  if (!allQuotasList) return;
+
+  if (!results.length) {
+    allQuotasList.innerHTML = '<div class="quota-placeholder">暂无额度数据</div>';
+    return;
+  }
+
+  const html = results.map((item, idx) => {
+    const acc = item.account;
+    const displayName = escapeHtml(getAccountDisplayName(acc));
+    const stats = tokenRuntimeStats[acc.projectId] || { successCount: 0, failureCount: 0, inCooldown: false };
+    const total = stats.successCount + stats.failureCount;
+    const successRate = total > 0 ? Math.round((stats.successCount / total) * 100) : 100;
+    const rateClass = successRate >= 80 ? 'score-high' : successRate >= 50 ? 'score-medium' : 'score-low';
+
+    let contentHtml = '';
+    if (item.error) {
+      contentHtml = `<div class="quota-error">加载失败: ${escapeHtml(item.error)}</div>`;
+    } else if (item.quota) {
+      contentHtml = `<div id="quota-all-${idx}"></div>`;
+    } else {
+      contentHtml = '<div class="quota-error">暂无额度数据</div>';
+    }
+
+    return `
+      <div class="quota-card-mini" data-index="${idx}">
+        <div class="quota-card-header">
+          <span class="quota-card-name" title="${displayName}">${displayName}</span>
+          <div class="quota-card-badges">
+            <span class="score-badge ${rateClass}">成功率: ${successRate}%</span>
+            ${stats.inCooldown ? '<span class="cooldown-badge">❄️ 冷却中</span>' : ''}
+          </div>
+        </div>
+        <div class="quota-card-content">
+          ${contentHtml}
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  allQuotasList.innerHTML = html;
+
+  // 渲染每个凭证的详细额度
+  results.forEach((item, idx) => {
+    if (item.quota) {
+      const container = document.getElementById(`quota-all-${idx}`);
+      if (container) {
+        renderQuota(container, item.quota);
+      }
+    }
+  });
+
+  // 绑定点击展开/折叠事件
+  allQuotasList.querySelectorAll('.quota-card-mini').forEach(card => {
+    card.addEventListener('click', () => {
+      card.classList.toggle('expanded');
+    });
   });
 }
 

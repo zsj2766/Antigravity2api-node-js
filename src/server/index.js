@@ -177,6 +177,30 @@ const SETTINGS_DEFINITIONS = [
     valueResolver: cfg => cfg.credentials.maxUsagePerHour
   },
   {
+    key: 'CREDENTIAL_MAX_STICKY_USAGE',
+    label: '连续调用保护次数',
+    category: '限额与重试',
+    defaultValue: 5,
+    description: '同一凭证连续成功调用多少次后切换',
+    valueResolver: cfg => cfg.credentials.maxStickyUsage
+  },
+  {
+    key: 'CREDENTIAL_POOL_SIZE',
+    label: '候选池大小',
+    category: '限额与重试',
+    defaultValue: 3,
+    description: '从最久未使用的凭证中选取多少个作为候选',
+    valueResolver: cfg => cfg.credentials.poolSize
+  },
+  {
+    key: 'CREDENTIAL_COOLDOWN_MS',
+    label: '冷却时间 (ms)',
+    category: '限额与重试',
+    defaultValue: 300000,
+    description: '429 错误后的冷却时间（毫秒）',
+    valueResolver: cfg => cfg.credentials.cooldownMs
+  },
+  {
     key: 'REQUEST_LOG_LEVEL',
     label: '调用日志级别',
     category: '调用日志',
@@ -1243,10 +1267,15 @@ app.post('/admin/settings', requirePanelAuthApi, (req, res) => {
 
     // 特殊配置项的即时处理
     if (
-      key === 'CREDENTIAL_MAX_USAGE_PER_HOUR' &&
-      typeof tokenManager.setHourlyLimit === 'function'
+      [
+        'CREDENTIAL_MAX_USAGE_PER_HOUR',
+        'CREDENTIAL_MAX_STICKY_USAGE',
+        'CREDENTIAL_POOL_SIZE',
+        'CREDENTIAL_COOLDOWN_MS'
+      ].includes(key) &&
+      typeof tokenManager.reloadConfig === 'function'
     ) {
-      tokenManager.setHourlyLimit(newConfig.credentials.maxUsagePerHour);
+      tokenManager.reloadConfig();
     }
 
     if (key === 'USE_NATIVE_AXIOS' && typeof refreshApiClientConfig === 'function') {
@@ -1491,12 +1520,19 @@ app.get('/admin/tokens/stats', requirePanelAuthApi, (req, res) => {
         const s = tokenManager.getStats(token);
         stats[key] = {
           ...s,
-          score: tokenManager.calculateScore(token),
           inCooldown: tokenManager.isInCooldown(token)
         };
       });
     }
-    res.json({ stats, cooldownMs: tokenManager.cooldownMs });
+    res.json({
+      stats,
+      config: {
+        cooldownMs: tokenManager.cooldownMs,
+        maxStickyUsage: tokenManager.MAX_STICKY_USAGE,
+        poolSize: tokenManager.POOL_SIZE,
+        hourlyLimit: tokenManager.hourlyLimit
+      }
+    });
   } catch (e) {
     logger.error('获取运行时统计失败:', e.message);
     res.status(500).json({ error: e.message || '获取运行时统计失败' });
@@ -1602,19 +1638,22 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
   const { messages, model, stream = true, tools, ...params } = req.body || {};
   const startedAt = Date.now();
   const requestSnapshot = createRequestSnapshot(req);
-  const streamEventsForLog = [];
+  let streamEventsForLog = [];
   let responseBodyForLog = null;
   let responseSummaryForLog = null;
 
   let token = null;
-  const writeLog = ({ success, status, message }) => {
+  const writeLog = ({ success, status, message, isRetry = false, retryCount = 0 }) => {
+    const logMessage = isRetry ? `[重试 ${retryCount}] ${message || ''}` : message;
     appendLog({
       timestamp: new Date().toISOString(),
       model: model || req.body?.model || 'unknown',
       projectId: token?.projectId || null,
       success,
       status,
-      message,
+      message: logMessage,
+      isRetry,
+      retryCount,
       durationMs: Date.now() - startedAt,
       path: req.originalUrl,
       method: req.method,
@@ -1642,26 +1681,45 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
           body: responseBodyForLog,
           modelOutput: responseSummaryForLog
         },
-        error: success ? undefined : message
+        error: success ? undefined : logMessage
       });
     }
   };
-  try {
-    if (!messages) {
-      res.status(400).json({ error: 'messages is required' });
-      writeLog({ success: false, status: 400, message: 'messages is required' });
-      return;
-    }
 
-    token = await resolveToken(req);
-    if (!token) {
-      const message =
-        options.tokenMissingError || '没有可用的 token，请先通过 OAuth 面板或 npm run login 获取。';
-      const status = options.tokenMissingStatus || 503;
-      res.status(status).json({ error: message });
-      writeLog({ success: false, status, message });
-      return;
-    }
+  if (!messages) {
+    res.status(400).json({ error: 'messages is required' });
+    writeLog({ success: false, status: 400, message: 'messages is required' });
+    return;
+  }
+
+  const maxAttempts = config.retry?.maxAttempts || 3;
+  const retryStatusCodes = config.retry?.statusCodes || [429, 500];
+  let attempt = 0;
+  let lastError = null;
+  const excludedTokenIds = new Set();
+
+  while (attempt < maxAttempts) {
+    attempt++;
+    const isLastAttempt = attempt === maxAttempts;
+
+    // 重置日志相关变量
+    streamEventsForLog = [];
+    responseBodyForLog = null;
+    responseSummaryForLog = null;
+    token = null;
+
+    try {
+      if (res.writableEnded || req.destroyed) break;
+
+      token = await resolveToken(req, excludedTokenIds);
+      if (!token) {
+        const noTokenError = new Error(
+          options.tokenMissingError || '没有可用的 token，请先通过 OAuth 面板或 npm run login 获取。'
+        );
+        noTokenError.status = options.tokenMissingStatus || 503;
+        noTokenError.code = 'NO_TOKEN';
+        throw noTokenError;
+      }
 
     // 兼容模型别名后缀 -1k/-2k/-4k：用于指定分辨率，发送给上游时去掉后缀
     let upstreamModel = model;
@@ -1843,51 +1901,97 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
       responseSummaryForLog = { text: content, tool_calls: toolCalls, usage };
     }
 
+    // 成功：记录统计并退出
+    tokenManager.recordSuccess(token);
     writeLog({ success: true, status: res.statusCode || 200 });
-  } catch (error) {
-    logger.error('生成响应失败:', error.message);
-    responseBodyForLog = responseBodyForLog || { error: error.message };
-    const errorStatus = error.status || error.statusCode || (res.statusCode >= 400 ? res.statusCode : 500);
-    writeLog({ success: false, status: errorStatus, message: error.message, code: error.code });
-    if (!res.headersSent) {
-      const { id, created } = createResponseMeta();
+    return;
 
-      // 构建更详细的错误消息
-      let errorContent = `错误: ${error.message}`;
-      if (error.code === 'RATE_LIMITED' && error.retryAfter) {
-        const retrySeconds = Math.ceil(error.retryAfter / 1000);
-        errorContent = `请求被限流，请等待 ${retrySeconds} 秒后重试。`;
-      } else if (error.code === 'TOKEN_DISABLED') {
-        errorContent = `凭证已失效或无权限，已自动切换。请重试。`;
+    } catch (error) {
+      lastError = error;
+      const errorStatus = error.status || error.statusCode || 500;
+
+      // 记录失败统计
+      if (token) {
+        tokenManager.recordFailure(token, errorStatus);
+        excludedTokenIds.add(tokenManager.getTokenKey(token));
       }
 
-      if (stream) {
-        setStreamHeaders(res);
-        writeStreamData(
-          res,
-          createStreamChunk(id, created, model || 'unknown', { content: errorContent })
-        );
-        endStream(res, id, created, model || 'unknown', 'stop');
-      } else {
-        res.status(errorStatus).json({
-          id,
-          object: 'chat.completion',
-          created,
-          model: model || 'unknown',
-          choices: [
-            {
-              index: 0,
-              message: { role: 'assistant', content: errorContent },
-              finish_reason: 'stop'
-            }
-          ],
-          error: {
-            code: error.code || 'UNKNOWN_ERROR',
-            message: error.message,
-            retry_after: error.retryAfter ? Math.ceil(error.retryAfter / 1000) : undefined
-          }
+      // 如果是 NO_TOKEN 错误，无法重试
+      if (error.code === 'NO_TOKEN') {
+        writeLog({ success: false, status: errorStatus, message: error.message });
+        if (!res.headersSent) {
+          res.status(errorStatus).json({ error: error.message });
+        }
+        return;
+      }
+
+      // 判断是否可重试
+      const isRetryable = retryStatusCodes.includes(errorStatus) ||
+        error.code === 'TOKEN_DISABLED' ||
+        error.code === 'RATE_LIMITED';
+
+      if (!isLastAttempt && isRetryable) {
+        // 记录重试日志
+        logger.warn(`请求失败 (尝试 ${attempt}/${maxAttempts})，正在切换凭证重试: ${error.message}`);
+        writeLog({
+          success: false,
+          status: errorStatus,
+          message: error.message,
+          isRetry: true,
+          retryCount: attempt
         });
+        continue;
       }
+
+      // 最后一次尝试或不可重试
+      logger.error('生成响应失败:', error.message);
+      responseBodyForLog = responseBodyForLog || { error: error.message };
+      writeLog({ success: false, status: errorStatus, message: error.message });
+
+      if (!res.headersSent) {
+        const { id, created } = createResponseMeta();
+
+        // 构建更详细的错误消息
+        let errorContent = `错误: ${error.message}`;
+        if (attempt > 1) {
+          errorContent = `请求失败 (已重试 ${attempt - 1} 次): ${error.message}`;
+        }
+        if (error.code === 'RATE_LIMITED' && error.retryAfter) {
+          const retrySeconds = Math.ceil(error.retryAfter / 1000);
+          errorContent = `请求被限流，请等待 ${retrySeconds} 秒后重试。`;
+        } else if (error.code === 'TOKEN_DISABLED') {
+          errorContent = `凭证已失效或无权限，已自动切换。请重试。`;
+        }
+
+        if (stream) {
+          setStreamHeaders(res);
+          writeStreamData(
+            res,
+            createStreamChunk(id, created, model || 'unknown', { content: errorContent })
+          );
+          endStream(res, id, created, model || 'unknown', 'stop');
+        } else {
+          res.status(errorStatus).json({
+            id,
+            object: 'chat.completion',
+            created,
+            model: model || 'unknown',
+            choices: [
+              {
+                index: 0,
+                message: { role: 'assistant', content: errorContent },
+                finish_reason: 'stop'
+              }
+            ],
+            error: {
+              code: error.code || 'UNKNOWN_ERROR',
+              message: error.message,
+              retry_after: error.retryAfter ? Math.ceil(error.retryAfter / 1000) : undefined
+            }
+          });
+        }
+      }
+      return;
     }
   }
 };
@@ -2315,14 +2419,10 @@ app.post('/v1/images/generations', async (req, res) => {
   }
 });
 
-app.post('/v1/chat/completions', createChatCompletionHandler(() => tokenManager.getToken()));
-app.post(
-  '/:credential/v1/chat/completions',
-  createChatCompletionHandler(
-    req => tokenManager.getTokenByProjectId(req.params.credential),
-    { tokenMissingError: '指定的凭证不存在或已停用，请检查凭证名。', tokenMissingStatus: 404 }
-  )
-);
+app.post('/v1/chat/completions', createChatCompletionHandler(
+  // 传入 excludeIds 以支持重试时规避已失败的 token
+  (req, excludeIds) => tokenManager.getToken(excludeIds)
+));
 
 app.post('/v1/messages/count_tokens', (req, res) => {
   const startedAt = Date.now();
