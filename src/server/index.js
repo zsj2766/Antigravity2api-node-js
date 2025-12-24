@@ -1483,9 +1483,13 @@ app.get('/admin/tokens/stats', requirePanelAuthApi, (req, res) => {
   try {
     const stats = {};
     if (tokenManager && Array.isArray(tokenManager.tokens)) {
-      tokenManager.tokens.forEach((token, index) => {
+      tokenManager.tokens.forEach((token) => {
+        // 使用 projectId 作为 key，与前端 accountsData 匹配
+        const key = token.projectId;
+        if (!key) return;
+
         const s = tokenManager.getStats(token);
-        stats[index] = {
+        stats[key] = {
           ...s,
           score: tokenManager.calculateScore(token),
           inCooldown: tokenManager.isInCooldown(token)

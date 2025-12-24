@@ -8,6 +8,11 @@ const refreshAllBtn = document.getElementById('refreshAllBtn');
 const logsRefreshBtn = document.getElementById('logsRefreshBtn');
 const logsClearBtn = document.getElementById('logsClearBtn');
 const hourlyUsageEl = document.getElementById('hourlyUsage');
+const nextTokenDisplay = document.getElementById('nextTokenDisplay');
+const nextTokenDesc = document.getElementById('nextTokenDesc');
+const globalQuotaValue = document.getElementById('globalQuotaValue');
+const globalQuotaBar = document.getElementById('globalQuotaBar');
+const globalQuotaDesc = document.getElementById('globalQuotaDesc');
 const manageStatusEl = document.getElementById('manageStatus');
 const callbackUrlInput = document.getElementById('callbackUrlInput');
 const customProjectIdInput = document.getElementById('customProjectIdInput');
@@ -133,8 +138,8 @@ function renderUsageCard(account) {
   const models = usage.models && usage.models.length > 0 ? usage.models.join(', ') : '暂无数据';
   const lastUsed = usage.lastUsedAt ? new Date(usage.lastUsedAt).toLocaleString() : '未使用';
 
-  // 运行时统计 - 使用 index 作为 key
-  const stats = tokenRuntimeStats[account.index] || {
+  // 运行时统计 - 使用 projectId 作为 key
+  const stats = tokenRuntimeStats[account.projectId] || {
     lastUsed: 0,
     lastFailure: 0,
     failureCount: 0,
@@ -545,6 +550,7 @@ async function refreshAccounts() {
     accountsData = authData.accounts || [];
     updateFilteredAccounts();
     loadHourlyUsage();
+    loadGlobalOverview();
   } catch (e) {
     listEl.textContent = '加载失败: ' + e.message;
   }
@@ -1170,6 +1176,92 @@ async function loadHourlyUsage() {
   }
 }
 
+async function loadGlobalOverview() {
+  if (!nextTokenDisplay) return;
+
+  // 1. 预测下一次调用
+  try {
+    const candidates = accountsData
+      .filter(acc => acc.enable)
+      .map(acc => {
+        const stats = tokenRuntimeStats[acc.projectId] || { score: 100, inCooldown: false };
+        return {
+          ...acc,
+          score: stats.score,
+          inCooldown: stats.inCooldown
+        };
+      });
+
+    if (candidates.length === 0) {
+      nextTokenDisplay.textContent = '无可用凭证';
+      nextTokenDesc.textContent = '请先添加或启用凭证';
+    } else {
+      // 模拟后端的排序逻辑：优先未冷却，其次按分数高低
+      candidates.sort((a, b) => {
+        if (a.inCooldown !== b.inCooldown) return a.inCooldown ? 1 : -1;
+        return b.score - a.score;
+      });
+
+      const best = candidates[0];
+      const displayName = getAccountDisplayName(best);
+      nextTokenDisplay.textContent = displayName;
+      nextTokenDisplay.title = displayName;
+
+      let statusText = `评分: ${Math.round(best.score)}`;
+      if (best.inCooldown) statusText += ' (冷却中)';
+      nextTokenDesc.textContent = statusText;
+    }
+  } catch (e) {
+    nextTokenDisplay.textContent = '预测失败';
+    console.error('预测下一凭证失败:', e);
+  }
+
+  // 2. 获取总体额度（通过已加载的 accountsData 统计）
+  try {
+    const enabledCount = accountsData.filter(acc => acc.enable).length;
+    const totalCount = accountsData.length;
+
+    if (totalCount === 0) {
+      globalQuotaValue.textContent = '无凭证';
+      globalQuotaBar.style.width = '0%';
+      globalQuotaDesc.textContent = '请先添加凭证';
+    } else {
+      // 统计凭证健康度（基于运行时统计）
+      let totalScore = 0;
+      let validCount = 0;
+      accountsData.filter(acc => acc.enable).forEach(acc => {
+        const stats = tokenRuntimeStats[acc.projectId];
+        if (stats && typeof stats.score === 'number') {
+          totalScore += stats.score;
+          validCount++;
+        }
+      });
+
+      if (validCount > 0) {
+        const avgScore = Math.round(totalScore / validCount);
+        const healthPercent = Math.min(100, Math.max(0, avgScore));
+        globalQuotaValue.textContent = `${healthPercent}分`;
+        globalQuotaBar.style.width = `${healthPercent}%`;
+
+        // 颜色指示
+        if (healthPercent > 80) globalQuotaBar.style.backgroundColor = '#10b981';
+        else if (healthPercent > 50) globalQuotaBar.style.backgroundColor = '#f59e0b';
+        else globalQuotaBar.style.backgroundColor = '#ef4444';
+
+        globalQuotaDesc.textContent = `${enabledCount}/${totalCount} 个凭证启用，平均健康度`;
+      } else {
+        globalQuotaValue.textContent = `${enabledCount}/${totalCount}`;
+        globalQuotaBar.style.width = '100%';
+        globalQuotaBar.style.backgroundColor = '#10b981';
+        globalQuotaDesc.textContent = '启用凭证数 / 总凭证数';
+      }
+    }
+  } catch (e) {
+    globalQuotaValue.textContent = '统计失败';
+    globalQuotaDesc.textContent = e.message || '未知错误';
+  }
+}
+
 if (loginBtn) {
   loginBtn.addEventListener('click', async () => {
     try {
@@ -1346,6 +1438,7 @@ if (refreshBtn) {
     refreshAccounts();
     loadLogs();
     loadHourlyUsage();
+    loadGlobalOverview();
   });
 }
 
@@ -1398,7 +1491,7 @@ if (usageRefreshBtn) {
     try {
       usageRefreshBtn.disabled = true;
       usageRefreshBtn.textContent = '刷新中...';
-      await loadHourlyUsage();
+      await Promise.all([loadHourlyUsage(), loadGlobalOverview()]);
       setStatus('用量已刷新', 'success', usageStatusEl);
     } catch (e) {
       setStatus('刷新用量失败: ' + e.message, 'error', usageStatusEl);
@@ -1439,5 +1532,6 @@ if (settingsGrid) {
 refreshAccounts();
 loadLogs();
 loadHourlyUsage();
+loadGlobalOverview();
 loadSettings();
 initLogSettingsUI();

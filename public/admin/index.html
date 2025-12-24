@@ -148,6 +148,37 @@
       <div class="status-row">
         <span id="usageStatus" class="badge" style="display:none;"></span>
       </div>
+
+      <div class="overview-card">
+        <div class="overview-item">
+          <div class="overview-icon">🎲</div>
+          <div class="overview-content">
+            <div class="overview-label">轮询规则</div>
+            <div class="overview-value">智能加权</div>
+            <div class="overview-desc">综合评分：冷却状态、空闲时间、失败次数、成功率</div>
+          </div>
+        </div>
+        <div class="overview-item">
+          <div class="overview-icon">⏭️</div>
+          <div class="overview-content">
+            <div class="overview-label">下一次调用预测</div>
+            <div class="overview-value" id="nextTokenDisplay">--</div>
+            <div class="overview-desc" id="nextTokenDesc">正在计算...</div>
+          </div>
+        </div>
+        <div class="overview-item">
+          <div class="overview-icon">📊</div>
+          <div class="overview-content">
+            <div class="overview-label">总体额度池 (剩余)</div>
+            <div class="overview-value" id="globalQuotaValue">--%</div>
+            <div class="progress-bar-mini" style="margin-top: 6px; width: 100%; height: 8px;">
+              <div class="progress-fill" id="globalQuotaBar" style="width: 0%"></div>
+            </div>
+            <div class="overview-desc" id="globalQuotaDesc" style="margin-top: 4px;">点击刷新获取</div>
+          </div>
+        </div>
+      </div>
+
       <div class="log-usage-card">
         <div class="log-usage-head">
           <div>
