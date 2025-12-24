@@ -1814,11 +1814,19 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
   } catch (error) {
     logger.error('生成响应失败:', error.message);
     responseBodyForLog = responseBodyForLog || { error: error.message };
-    const errorStatus = error.statusCode || (res.statusCode >= 400 ? res.statusCode : 500);
-    writeLog({ success: false, status: errorStatus, message: error.message });
+    const errorStatus = error.status || error.statusCode || (res.statusCode >= 400 ? res.statusCode : 500);
+    writeLog({ success: false, status: errorStatus, message: error.message, code: error.code });
     if (!res.headersSent) {
       const { id, created } = createResponseMeta();
-      const errorContent = `错误: ${error.message}`;
+
+      // 构建更详细的错误消息
+      let errorContent = `错误: ${error.message}`;
+      if (error.code === 'RATE_LIMITED' && error.retryAfter) {
+        const retrySeconds = Math.ceil(error.retryAfter / 1000);
+        errorContent = `请求被限流，请等待 ${retrySeconds} 秒后重试。`;
+      } else if (error.code === 'TOKEN_DISABLED') {
+        errorContent = `凭证已失效或无权限，已自动切换。请重试。`;
+      }
 
       if (stream) {
         setStreamHeaders(res);
@@ -1828,8 +1836,7 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
         );
         endStream(res, id, created, model || 'unknown', 'stop');
       } else {
-        const status = error.statusCode || 500;
-        res.status(status).json({
+        res.status(errorStatus).json({
           id,
           object: 'chat.completion',
           created,
@@ -1840,7 +1847,12 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
               message: { role: 'assistant', content: errorContent },
               finish_reason: 'stop'
             }
-          ]
+          ],
+          error: {
+            code: error.code || 'UNKNOWN_ERROR',
+            message: error.message,
+            retry_after: error.retryAfter ? Math.ceil(error.retryAfter / 1000) : undefined
+          }
         });
       }
     }

@@ -21,7 +21,107 @@ class TokenManager {
     this.hourlyLimit = Number.isFinite(Number(config.credentials?.maxUsagePerHour))
       ? Number(config.credentials.maxUsagePerHour)
       : 20;
+    this.cooldownMs = 5 * 60 * 1000; // 429 错误后冷却 5 分钟
+    this.tokenStats = new Map(); // 凭证统计
     this.initialize();
+  }
+
+  getStats(token) {
+    const key = token.projectId || token.access_token;
+    if (!this.tokenStats.has(key)) {
+      this.tokenStats.set(key, { lastUsed: 0, lastFailure: 0, failureCount: 0, successCount: 0 });
+    }
+    return this.tokenStats.get(key);
+  }
+
+  recordSuccess(token) {
+    const stats = this.getStats(token);
+    stats.lastUsed = Date.now();
+    stats.successCount += 1;
+    stats.failureCount = 0;
+  }
+
+  recordFailure(token, statusCode) {
+    const stats = this.getStats(token);
+    stats.lastUsed = Date.now();
+    stats.failureCount += 1;
+    if (statusCode === 429) {
+      stats.lastFailure = Date.now();
+    }
+  }
+
+  isInCooldown(token) {
+    const stats = this.getStats(token);
+    if (stats.lastFailure === 0) return false;
+    return Date.now() - stats.lastFailure < this.cooldownMs;
+  }
+
+  calculateScore(token) {
+    const stats = this.getStats(token);
+    const now = Date.now();
+    let score = 100;
+
+    if (this.isInCooldown(token)) score -= 80;
+
+    const idleMinutes = (now - stats.lastUsed) / 60000;
+    score += Math.min(idleMinutes, 20);
+
+    score -= stats.failureCount * 10;
+
+    const total = stats.successCount + stats.failureCount;
+    if (total > 0) {
+      score += (stats.successCount / total) * 10;
+    }
+
+    return score;
+  }
+
+  async getNextAvailableToken(excludeIds = new Set()) {
+    if (this.tokens.length === 0) return null;
+
+    const available = this.tokens.filter(t =>
+      !excludeIds.has(t.projectId || t.access_token) && t.enable !== false
+    );
+
+    if (available.length === 0) return null;
+
+    const notInCooldown = available.filter(t => !this.isInCooldown(t));
+    const candidates = notInCooldown.length > 0 ? notInCooldown : available;
+
+    candidates.sort((a, b) => this.calculateScore(b) - this.calculateScore(a));
+
+    return this.prepareToken(candidates[0]);
+  }
+
+  async prepareToken(token) {
+    try {
+      if (this.isExpired(token)) {
+        await this.refreshToken(token);
+      }
+
+      if (!token.projectId) {
+        if (config.skipProjectIdFetch) {
+          token.projectId = generateProjectId();
+          this.saveToFile();
+        } else {
+          const projectId = await this.fetchProjectId(token);
+          if (projectId === undefined) {
+            this.disableToken(token);
+            return null;
+          }
+          token.projectId = projectId;
+          this.saveToFile();
+        }
+      }
+
+      return token;
+    } catch (error) {
+      if (error.statusCode === 403 || error.statusCode === 400) {
+        this.disableToken(token);
+        return null;
+      }
+      throw error;
+    }
   }
 
   ensureDataFile() {
@@ -163,7 +263,7 @@ class TokenManager {
           allTokens[index] = tokenToSave;
         }
       });
-      
+
       fs.writeFileSync(this.filePath, JSON.stringify(allTokens, null, 2), 'utf8');
     } catch (error) {
       log.error('保存文件失败:', error.message);
@@ -181,66 +281,22 @@ class TokenManager {
   async getToken() {
     if (this.tokens.length === 0) return null;
 
-    let attempts = 0;
-    const totalTokens = this.tokens.length;
+    // 使用评分系统选择最佳凭证
+    const enabledTokens = this.tokens.filter(t => t.enable !== false);
+    if (enabledTokens.length === 0) return null;
 
-    while (attempts < totalTokens) {
-      const token = this.tokens[this.currentIndex];
+    // 优先选择不在冷却期且符合小时限制的凭证
+    const candidates = enabledTokens
+      .filter(t => !this.isInCooldown(t) && this.isWithinHourlyLimit(t));
 
-      try {
-        if (this.isExpired(token)) {
-          await this.refreshToken(token);
-        }
-
-        if (!token.projectId) {
-          if (config.skipProjectIdFetch) {
-            token.projectId = generateProjectId();
-            this.saveToFile();
-            log.info(`...${token.access_token.slice(-8)}: 使用随机生成的projectId: ${token.projectId}`);
-          } else {
-            try {
-              const projectId = await this.fetchProjectId(token);
-              if (projectId === undefined) {
-                log.warn(`...${token.access_token.slice(-8)}: 无资格获取projectId，跳过保存`);
-                this.disableToken(token);
-                if (this.tokens.length === 0) return null;
-                attempts += 1;
-                continue;
-              }
-              token.projectId = projectId;
-              this.saveToFile();
-            } catch (error) {
-              log.error(`...${token.access_token.slice(-8)}: 获取projectId失败:`, error.message);
-              this.moveToNextToken();
-              attempts += 1;
-              continue;
-            }
-          }
-        }
-
-        if (!this.isWithinHourlyLimit(token)) {
-          this.moveToNextToken();
-          attempts += 1;
-          continue;
-        }
-
-        return token;
-      } catch (error) {
-        if (error.statusCode === 403 || error.statusCode === 400) {
-          const accountNum = this.currentIndex + 1;
-          log.warn(`账号 ${accountNum}: Token 已失效或错误，已自动禁用该账号`);
-          this.disableToken(token);
-          if (this.tokens.length === 0) return null;
-        } else {
-          log.error(`Token ${this.currentIndex + 1} 刷新失败:`, error.message);
-          this.moveToNextToken();
-        }
-      }
-
-      attempts += 1;
+    if (candidates.length > 0) {
+      candidates.sort((a, b) => this.calculateScore(b) - this.calculateScore(a));
+      return this.prepareToken(candidates[0]);
     }
 
-    return null;
+    // 如果所有凭证都在冷却或超限，选择评分最高的
+    enabledTokens.sort((a, b) => this.calculateScore(b) - this.calculateScore(a));
+    return this.prepareToken(enabledTokens[0]);
   }
 
   async getTokenByProjectId(projectId) {
