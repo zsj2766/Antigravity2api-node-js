@@ -1478,6 +1478,30 @@ app.get('/admin/quota/all', requireApiKey, async (req, res) => {
   }
 });
 
+// 获取 Token 运行时统计
+app.get('/admin/tokens/stats', requirePanelAuthApi, (req, res) => {
+  try {
+    const stats = {};
+    if (tokenManager && Array.isArray(tokenManager.tokens)) {
+      tokenManager.tokens.forEach(token => {
+        const key = token.projectId || token.access_token;
+        if (!key) return;
+
+        const s = tokenManager.getStats(token);
+        stats[key] = {
+          ...s,
+          score: tokenManager.calculateScore(token),
+          inCooldown: tokenManager.isInCooldown(token)
+        };
+      });
+    }
+    res.json({ stats, cooldownMs: tokenManager.cooldownMs });
+  } catch (e) {
+    logger.error('获取运行时统计失败:', e.message);
+    res.status(500).json({ error: e.message || '获取运行时统计失败' });
+  }
+});
+
 // 额度查询接口
 app.get('/admin/tokens/:index/quotas', requirePanelAuthApi, async (req, res) => {
   try {

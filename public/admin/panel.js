@@ -41,6 +41,8 @@ const HOURLY_LIMIT = 20;
 
 const PAGE_SIZE = 5;
 let accountsData = [];
+let tokenRuntimeStats = {};
+let tokenCooldownMs = 5 * 60 * 1000; // 默认5分钟，从后端动态更新
 let filteredAccounts = [];
 let currentPage = 1;
 const LOG_PAGE_SIZE = 20;
@@ -114,14 +116,63 @@ function getAccountDisplayName(acc) {
   return '未知账号';
 }
 
+async function loadTokenRuntimeStats() {
+  try {
+    const data = await fetchJson('/admin/tokens/stats');
+    tokenRuntimeStats = data.stats || {};
+    if (data.cooldownMs) {
+      tokenCooldownMs = data.cooldownMs;
+    }
+  } catch (e) {
+    console.error('加载运行时统计失败:', e);
+  }
+}
+
 function renderUsageCard(account) {
   const { usage = {} } = account;
   const models = usage.models && usage.models.length > 0 ? usage.models.join(', ') : '暂无数据';
   const lastUsed = usage.lastUsedAt ? new Date(usage.lastUsedAt).toLocaleString() : '未使用';
+
+  // 运行时统计
+  const key = account.projectId || account.access_token;
+  const stats = tokenRuntimeStats[key] || {
+    lastUsed: 0,
+    lastFailure: 0,
+    failureCount: 0,
+    successCount: 0,
+    score: 100,
+    inCooldown: false
+  };
+
+  const scoreClass = stats.score >= 80 ? 'score-high' : stats.score >= 50 ? 'score-medium' : 'score-low';
+
+  // 计算成功率
+  const totalReqs = stats.successCount + stats.failureCount;
+  const successRate = totalReqs > 0 ? Math.round((stats.successCount / totalReqs) * 100) : 100;
+
+  // 冷却倒计时
+  let cooldownHtml = '';
+  if (stats.inCooldown) {
+    const cooldownEnd = stats.lastFailure + tokenCooldownMs;
+    const remainingSeconds = Math.max(0, Math.ceil((cooldownEnd - Date.now()) / 1000));
+    cooldownHtml = `<div class="cooldown-badge">❄️ 冷却中 (${remainingSeconds}s)</div>`;
+  }
+
   return `
-    <div class="usage"> 
+    <div class="usage">
+      <div class="stats-header">
+        <div class="score-badge ${scoreClass}">评分: ${Math.round(stats.score)}</div>
+        ${cooldownHtml}
+      </div>
       <div class="usage-row"><span>累计调用</span><strong>${usage.total || 0}</strong></div>
       <div class="usage-row"><span>成功 / 失败</span><strong>${usage.success || 0} / ${usage.failed || 0}</strong></div>
+      <div class="usage-row">
+        <span>近期成功率</span>
+        <div class="progress-bar-mini">
+           <div class="progress-fill" style="width: ${successRate}%; background-color: ${successRate > 80 ? '#10b981' : successRate > 50 ? '#f59e0b' : '#ef4444'}"></div>
+        </div>
+      </div>
+      <div class="usage-row"><span>近期统计</span><strong>✅${stats.successCount} / ❌${stats.failureCount}</strong></div>
       <div class="usage-row"><span>最近使用</span><strong>${lastUsed}</strong></div>
       <div class="usage-row"><span>使用过的模型</span><strong>${models}</strong></div>
     </div>
@@ -488,8 +539,11 @@ function renderQuota(container, quotaData) {
 
 async function refreshAccounts() {
   try {
-    const data = await fetchJson('/auth/accounts');
-    accountsData = data.accounts || [];
+    const [authData] = await Promise.all([
+      fetchJson('/auth/accounts'),
+      loadTokenRuntimeStats()
+    ]);
+    accountsData = authData.accounts || [];
     updateFilteredAccounts();
     loadHourlyUsage();
   } catch (e) {
@@ -997,7 +1051,11 @@ function renderLogs() {
         <div class="log-item ${cls}">
           <div class="log-content">
             <div class="log-time">${time}</div>
-            <div class="log-meta">模型：${log.model || '未知模型'} | 项目：${log.projectId || '未知项目'}</div>
+            <div class="log-meta">
+              模型：${log.model || '未知模型'} |
+              项目：${log.projectId || '未知项目'}
+              ${log.tokenId ? ` | Token: ${log.tokenId.slice(-6)}` : ''}
+            </div>
             <div class="log-meta">${pathText}</div>
             <div class="log-meta">${statusText} | ${durationText}</div>
             ${errorHint}
