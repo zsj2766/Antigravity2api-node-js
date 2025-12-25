@@ -191,18 +191,11 @@ function renderUsageCard(account) {
   return `
     <div class="usage">
       <div class="stats-header">
-        <div class="score-badge ${rateClass}">成功率: ${successRate}%</div>
+        <div class="score-badge ${rateClass}" data-tooltip="基于本次运行数据计算\n成功数 / (成功数 + 失败数) × 100%">成功率: ${successRate}%</div>
         ${cooldownHtml}
       </div>
-      <div class="usage-row"><span>累计调用</span><strong>${usage.total || 0}</strong></div>
-      <div class="usage-row"><span>成功 / 失败</span><strong>${usage.success || 0} / ${usage.failed || 0}</strong></div>
-      <div class="usage-row">
-        <span>近期成功率</span>
-        <div class="progress-bar-mini">
-           <div class="progress-fill" style="width: ${successRate}%; background-color: ${successRate > 80 ? '#10b981' : successRate > 50 ? '#f59e0b' : '#ef4444'}"></div>
-        </div>
-      </div>
-      <div class="usage-row"><span>近期统计</span><strong>✅${stats.successCount} / ❌${stats.failureCount}</strong></div>
+      <div class="usage-row" data-tooltip="服务启动后的统计，重启后清零\n用于计算成功率和负载均衡"><span>本次运行</span><strong>✅${stats.successCount} / ❌${stats.failureCount}</strong></div>
+      <div class="usage-row" data-tooltip="从日志文件统计的历史数据\n受日志保留策略影响（默认保留 7 天）"><span>历史统计</span><strong>${usage.total || 0} 次 (成功 ${usage.success || 0} / 失败 ${usage.failed || 0})</strong></div>
       <div class="usage-row"><span>最近使用</span><strong>${lastUsed}</strong></div>
       <div class="usage-row"><span>使用过的模型</span><strong>${models}</strong></div>
     </div>

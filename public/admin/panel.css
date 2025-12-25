@@ -476,6 +476,8 @@ button:disabled {
   padding: 2px 8px;
   border-radius: 4px;
   color: white;
+  position: relative;
+  cursor: help;
 }
 
 .score-high { background-color: #10b981; }
@@ -519,6 +521,7 @@ button:disabled {
   font-size: 12px;
   color: var(--muted);
   margin-bottom: 2px;
+  position: relative;
 }
 
 .usage-row:last-child {
@@ -528,6 +531,48 @@ button:disabled {
 .usage-row strong {
   color: var(--text);
   font-weight: 600;
+}
+
+/* 通用 Tooltip 样式 */
+[data-tooltip] {
+  position: relative;
+}
+
+[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 0;
+  top: 100%;
+  margin-top: 8px;
+  background: #1f2937;
+  color: #f9fafb;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.5;
+  white-space: pre-line;
+  width: max-content;
+  max-width: 240px;
+  z-index: 100;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  transform: translateY(-4px);
+}
+
+[data-tooltip]:hover::after {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+/* 带有 tooltip 的标签提示 */
+.usage-row[data-tooltip] > span:first-child {
+  cursor: help;
+  border-bottom: 1px dashed var(--muted);
 }
 
 /* 全局概览卡片 */
