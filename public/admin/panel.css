@@ -642,6 +642,24 @@ button:disabled {
   line-height: 1.4;
 }
 
+/* 分栏容器：在一个 overview-item 内展示两个指标 */
+.overview-split-container {
+  display: flex;
+  gap: 16px;
+  align-items: stretch;
+}
+
+.overview-split-item {
+  flex: 1;
+  min-width: 0;
+}
+
+.overview-divider {
+  width: 1px;
+  background: var(--border);
+  margin: -4px 0;
+}
+
 .mini-btn {
   background: var(--neutral-btn-bg);
   color: var(--neutral-btn-text);

@@ -12,7 +12,8 @@ const nextTokenDisplay = document.getElementById('nextTokenDisplay');
 const nextTokenDesc = document.getElementById('nextTokenDesc');
 const globalQuotaValue = document.getElementById('globalQuotaValue');
 const globalQuotaBar = document.getElementById('globalQuotaBar');
-const globalQuotaDesc = document.getElementById('globalQuotaDesc');
+const globalHealthValue = document.getElementById('globalHealthValue');
+const globalHealthBar = document.getElementById('globalHealthBar');
 const manageStatusEl = document.getElementById('manageStatus');
 const callbackUrlInput = document.getElementById('callbackUrlInput');
 const customProjectIdInput = document.getElementById('customProjectIdInput');
@@ -1240,20 +1241,21 @@ async function loadGlobalOverview() {
     console.error('预测下一凭证失败:', e);
   }
 
-  // 2. 获取总体额度（通过已加载的 accountsData 统计）
+  // 2. 更新凭证健康度（基于运行时成功率）
   try {
-    const enabledCount = accountsData.filter(acc => acc.enable).length;
+    const enabledAccounts = accountsData.filter(acc => acc.enable);
     const totalCount = accountsData.length;
 
-    if (totalCount === 0) {
-      globalQuotaValue.textContent = '无凭证';
-      globalQuotaBar.style.width = '0%';
-      globalQuotaDesc.textContent = '请先添加凭证';
+    if (totalCount === 0 || enabledAccounts.length === 0) {
+      if (globalHealthValue) globalHealthValue.textContent = '--%';
+      if (globalHealthBar) globalHealthBar.style.width = '0%';
+      if (globalQuotaValue) globalQuotaValue.textContent = '--%';
+      if (globalQuotaBar) globalQuotaBar.style.width = '0%';
     } else {
-      // 统计凭证健康度（基于成功率）
+      // 计算健康度（基于运行时成功率）
       let totalSuccessRate = 0;
       let validCount = 0;
-      accountsData.filter(acc => acc.enable).forEach(acc => {
+      enabledAccounts.forEach(acc => {
         const stats = tokenRuntimeStats[acc.projectId];
         if (stats) {
           const total = stats.successCount + stats.failureCount;
@@ -1265,25 +1267,30 @@ async function loadGlobalOverview() {
 
       if (validCount > 0) {
         const avgRate = Math.round(totalSuccessRate / validCount);
-        globalQuotaValue.textContent = `${avgRate}%`;
-        globalQuotaBar.style.width = `${avgRate}%`;
-
-        // 颜色指示
-        if (avgRate > 80) globalQuotaBar.style.backgroundColor = '#10b981';
-        else if (avgRate > 50) globalQuotaBar.style.backgroundColor = '#f59e0b';
-        else globalQuotaBar.style.backgroundColor = '#ef4444';
-
-        globalQuotaDesc.textContent = `${enabledCount}/${totalCount} 个凭证启用，平均成功率`;
+        if (globalHealthValue) globalHealthValue.textContent = `${avgRate}%`;
+        if (globalHealthBar) {
+          globalHealthBar.style.width = `${avgRate}%`;
+          if (avgRate > 80) globalHealthBar.style.backgroundColor = '#10b981';
+          else if (avgRate > 50) globalHealthBar.style.backgroundColor = '#f59e0b';
+          else globalHealthBar.style.backgroundColor = '#ef4444';
+        }
       } else {
-        globalQuotaValue.textContent = `${enabledCount}/${totalCount}`;
-        globalQuotaBar.style.width = '100%';
-        globalQuotaBar.style.backgroundColor = '#10b981';
-        globalQuotaDesc.textContent = '启用凭证数 / 总凭证数';
+        // 无运行时数据时显示 100%
+        if (globalHealthValue) globalHealthValue.textContent = '100%';
+        if (globalHealthBar) {
+          globalHealthBar.style.width = '100%';
+          globalHealthBar.style.backgroundColor = '#10b981';
+        }
       }
+
+      // 真实额度：显示"点击刷新"提示，实际数据需要异步加载
+      if (globalQuotaValue) globalQuotaValue.textContent = '--';
+      if (globalQuotaBar) globalQuotaBar.style.width = '0%';
     }
   } catch (e) {
-    globalQuotaValue.textContent = '统计失败';
-    globalQuotaDesc.textContent = e.message || '未知错误';
+    if (globalHealthValue) globalHealthValue.textContent = '错误';
+    if (globalQuotaValue) globalQuotaValue.textContent = '错误';
+    console.error('更新概览失败:', e);
   }
 }
 
@@ -1655,6 +1662,57 @@ function renderAllQuotas(results) {
       card.classList.toggle('expanded');
     });
   });
+
+  // 更新全局额度池统计
+  updateGlobalQuotaFromResults(results);
+}
+
+function updateGlobalQuotaFromResults(results) {
+  if (!globalQuotaValue || !globalQuotaBar) return;
+
+  // 计算平均剩余额度
+  let totalRemainingPercent = 0;
+  let validCount = 0;
+
+  results.forEach(item => {
+    if (item.quota && !item.error) {
+      // 遍历所有模型的额度，计算平均剩余比例
+      const groups = item.quota;
+      let accountTotalRemaining = 0;
+      let accountTotalLimit = 0;
+
+      Object.values(groups).forEach(models => {
+        if (Array.isArray(models)) {
+          models.forEach(model => {
+            if (model.limit && model.limit > 0) {
+              accountTotalRemaining += model.remaining || 0;
+              accountTotalLimit += model.limit;
+            }
+          });
+        }
+      });
+
+      if (accountTotalLimit > 0) {
+        const accountPercent = (accountTotalRemaining / accountTotalLimit) * 100;
+        totalRemainingPercent += accountPercent;
+        validCount++;
+      }
+    }
+  });
+
+  if (validCount > 0) {
+    const avgPercent = Math.round(totalRemainingPercent / validCount);
+    globalQuotaValue.textContent = `${avgPercent}%`;
+    globalQuotaBar.style.width = `${avgPercent}%`;
+
+    // 颜色指示
+    if (avgPercent > 50) globalQuotaBar.style.backgroundColor = '#10b981';
+    else if (avgPercent > 20) globalQuotaBar.style.backgroundColor = '#f59e0b';
+    else globalQuotaBar.style.backgroundColor = '#ef4444';
+  } else {
+    globalQuotaValue.textContent = '无数据';
+    globalQuotaBar.style.width = '0%';
+  }
 }
 
 if (settingsRefreshBtn) {
