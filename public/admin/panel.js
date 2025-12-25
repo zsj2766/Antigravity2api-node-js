@@ -1134,6 +1134,7 @@ async function loadHourlyUsage() {
 
         return {
           projectId,
+          index: acc.index,
           label: getAccountDisplayName(acc),
           count: stats.count || 0,
           success: successCalls,
@@ -1161,10 +1162,14 @@ async function loadHourlyUsage() {
     });
 
     const html = sorted
-      .map(item => {
+      .map((item, mapIndex) => {
         const percent = Math.min(100, Math.round(((item.count || 0) / limit) * 100));
         const lastUsedText = item.lastUsedAt ? new Date(item.lastUsedAt).toLocaleString() : '暂无';
-        const projectIdSafe = escapeHtml(item.projectId || '');
+        // 使用 mapIndex 生成唯一 ID 避免 projectId 特殊字符或重复导致的问题
+        const uniqueId = `quota-inline-${mapIndex}`;
+        // 只有当 index 存在时才显示加载额度按钮
+        const hasIndex = item.index !== undefined && item.index !== null;
+
         return `
           <div class="log-usage-row">
             <div class="log-usage-header">
@@ -1187,14 +1192,49 @@ async function loadHourlyUsage() {
                 <span class="stat-label">最近使用</span>
                 <span class="stat-value">${escapeHtml(lastUsedText)}</span>
               </div>
+              ${hasIndex ? `<button class="quota-toggle-btn mini-btn" data-target-id="${uniqueId}" data-index="${item.index}">📊 加载额度</button>` : ''}
             </div>
-            <div class="quota-inline-container" id="quota-inline-${projectIdSafe}"></div>
+            <div class="quota-inline-container" id="${uniqueId}" style="display: none;"></div>
           </div>
         `;
       })
       .join('');
 
     hourlyUsageEl.innerHTML = html;
+
+    // 绑定额度加载/收起按钮事件
+    hourlyUsageEl.querySelectorAll('.quota-toggle-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const targetId = btn.dataset.targetId;
+        const accountIndex = btn.dataset.index;
+        const container = document.getElementById(targetId);
+        if (!container) return;
+
+        const isVisible = container.style.display !== 'none';
+        if (isVisible) {
+          // 收起
+          container.style.display = 'none';
+          btn.textContent = '📊 加载额度';
+        } else {
+          // 展开并加载
+          container.style.display = 'block';
+          btn.textContent = '⏳ 加载中...';
+          btn.disabled = true;
+
+          try {
+            const data = await fetchJson(`/admin/tokens/${accountIndex}/quotas`, { cache: 'no-store' });
+            renderQuota(container, data.data);
+            btn.textContent = '📊 收起额度';
+          } catch (err) {
+            container.innerHTML = `<div class="quota-error">加载失败: ${escapeHtml(err.message)}</div>`;
+            btn.textContent = '📊 重试加载';
+          } finally {
+            btn.disabled = false;
+          }
+        }
+      });
+    });
   } catch (e) {
     hourlyUsageEl.textContent = '加载用量失败: ' + e.message;
   }
@@ -1560,11 +1600,12 @@ async function loadAllQuotas() {
   for (let i = 0; i < enabledAccounts.length; i++) {
     const acc = enabledAccounts[i];
 
+    // 防御性检查：跳过无效 index
+    if (acc.index === undefined || acc.index === null) continue;
+
     if (loadAllQuotasBtn) {
       loadAllQuotasBtn.textContent = `加载中 ${i + 1}/${enabledAccounts.length}`;
     }
-
-    const container = document.getElementById(`quota-inline-${acc.projectId}`);
 
     try {
       const data = await fetchJson(`/admin/tokens/${acc.index}/quotas`, { cache: 'no-store' });
@@ -1573,21 +1614,12 @@ async function loadAllQuotas() {
         quota: data.data,
         error: null
       });
-
-      // 实时渲染到对应凭证下方
-      if (container) {
-        renderQuota(container, data.data);
-      }
     } catch (e) {
       quotaResults.push({
         account: acc,
         quota: null,
         error: e.message
       });
-
-      if (container) {
-        container.innerHTML = `<div class="quota-error">加载失败: ${escapeHtml(e.message)}</div>`;
-      }
     }
   }
 
@@ -1610,37 +1642,28 @@ function updateGlobalQuotaFromResults(results) {
   if (!globalQuotaValue || !globalQuotaBar) return;
 
   // 计算平均剩余额度
-  let totalRemainingPercent = 0;
-  let validCount = 0;
+  let totalRemaining = 0;
+  let modelCount = 0;
 
   results.forEach(item => {
-    if (item.quota && !item.error) {
-      // 遍历所有模型的额度，计算平均剩余比例
-      const groups = item.quota;
-      let accountTotalRemaining = 0;
-      let accountTotalLimit = 0;
-
-      Object.values(groups).forEach(models => {
-        if (Array.isArray(models)) {
-          models.forEach(model => {
-            if (model.limit && model.limit > 0) {
-              accountTotalRemaining += model.remaining || 0;
-              accountTotalLimit += model.limit;
-            }
-          });
+    if (item.quota && !item.error && item.quota.models) {
+      // 遍历所有模型的额度
+      Object.values(item.quota.models).forEach(modelInfo => {
+        if (modelInfo && typeof modelInfo.remaining === 'number') {
+          // 确保 remaining 在 0-1 之间
+          const val = Math.max(0, Math.min(1, modelInfo.remaining));
+          totalRemaining += val;
+          modelCount++;
         }
       });
-
-      if (accountTotalLimit > 0) {
-        const accountPercent = (accountTotalRemaining / accountTotalLimit) * 100;
-        totalRemainingPercent += accountPercent;
-        validCount++;
-      }
     }
   });
 
-  if (validCount > 0) {
-    const avgPercent = Math.round(totalRemainingPercent / validCount);
+  if (modelCount > 0) {
+    // 计算平均剩余比例（remaining 是 0-1 的比例值）
+    const avgRemaining = totalRemaining / modelCount;
+    const avgPercent = Math.min(100, Math.round(avgRemaining * 100));
+
     globalQuotaValue.textContent = `${avgPercent}%`;
     globalQuotaBar.style.width = `${avgPercent}%`;
 
