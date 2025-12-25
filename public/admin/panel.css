@@ -1002,6 +1002,39 @@ button:disabled {
   border-color: var(--info-bg);
 }
 
+.log-legend {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+  margin-bottom: 8px;
+}
+
+.legend-item {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  font-weight: 500;
+}
+
+.legend-success {
+  background: var(--log-success-bg);
+  border-color: var(--log-success-border);
+  color: var(--status-ok-text);
+}
+
+.legend-retry {
+  background: var(--chip-warning-bg);
+  border-color: var(--chip-warning-border);
+  color: var(--chip-warning-text);
+}
+
+.legend-fail {
+  background: var(--log-fail-bg);
+  border-color: var(--log-fail-border);
+  color: var(--status-off-text);
+}
+
 .logs {
   display: flex;
   flex-direction: column;
@@ -1110,6 +1143,7 @@ button:disabled {
 
 .log-success { background: var(--log-success-bg); border-color: var(--log-success-border); }
 .log-fail { background: var(--log-fail-bg); border-color: var(--log-fail-border); }
+/* .log-retry 已弃用，现在统一使用 success/fail 背景，重试状态通过 chip 标签显示 */
 .log-retry { background: var(--chip-warning-bg); border-color: var(--chip-warning-border); }
 
 .log-content {

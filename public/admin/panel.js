@@ -1053,14 +1053,20 @@ function renderLogs() {
     .map((log, idx) => {
       const time = log.timestamp ? new Date(log.timestamp).toLocaleString() : '未知时间';
       const isRetry = log.isRetry === true;
-      const cls = log.success ? 'log-success' : (isRetry ? 'log-retry' : 'log-fail');
+      // 方案调整：只区分成功/失败背景，不再使用 log-retry 橙色背景
+      const cls = log.success ? 'log-success' : 'log-fail';
       const hasError = !log.success;
       const detailId = `log-detail-${start + idx}`;
       const errorDetailId = `log-error-${start + idx}`;
       const statusText = log.status ? `HTTP ${log.status}` : log.success ? '成功' : '失败';
       const durationText = log.durationMs ? `${log.durationMs} ms` : '未知耗时';
       const pathText = `${log.method || '未知方法'} ${log.path || log.route || '未知路径'}`;
-      const retryBadge = isRetry ? `<span class="chip chip-warning">重试 #${log.retryCount || 1}</span>` : '';
+
+      // 类型标签：仅重试请求显示标签，首次请求不显示（保持简洁）
+      const typeLabel = isRetry
+        ? `<span class="chip chip-warning">重试 #${log.retryCount || 1}</span>`
+        : '';
+
       const errorHint = hasError && log.message ? `<div class="log-error-hint">失败原因：${escapeHtml(log.message)}</div>` : '';
       const detailButton =
         log.hasDetail && log.id
@@ -1077,7 +1083,7 @@ function renderLogs() {
       return `
         <div class="log-item ${cls}">
           <div class="log-content">
-            <div class="log-time">${time} ${retryBadge}</div>
+            <div class="log-time">${time} ${typeLabel}</div>
             <div class="log-meta">
               模型：${log.model || '未知模型'} |
               项目：${log.projectId || '未知项目'}
@@ -1089,7 +1095,7 @@ function renderLogs() {
             ${errorButton}
             ${detailButton}
           </div>
-          <div class="log-status">${log.success ? '成功' : (isRetry ? '重试中' : '失败')}</div>
+          <div class="log-status">${log.success ? '成功' : '失败'}</div>
         </div>
       `;
     })
