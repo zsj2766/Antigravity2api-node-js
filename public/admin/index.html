@@ -143,7 +143,10 @@
           <h2>凭证用量</h2>
           <p>查看凭证的额度状态、评分情况及每小时调用统计。</p>
         </div>
-        <button id="usageRefreshBtn" class="refresh-btn">🔄 刷新数据</button>
+        <div class="card-actions">
+          <button id="loadAllQuotasBtn" class="refresh-btn">📥 加载所有额度</button>
+          <button id="usageRefreshBtn" class="refresh-btn">🔄 刷新数据</button>
+        </div>
       </div>
 
       <div class="strategy-info-box">
@@ -186,11 +189,12 @@
 
             <!-- API 额度 -->
             <div class="overview-split-item">
-              <div class="overview-label" data-tooltip="所有启用凭证的平均剩余 API 配额&#10;点击刷新获取最新数据">API 额度池</div>
-              <div class="overview-value" id="globalQuotaValue">--%</div>
+              <div class="overview-label" data-tooltip="所有启用凭证的平均剩余 API 配额&#10;点击加载所有额度获取数据">API 额度池</div>
+              <div class="overview-value" id="globalQuotaValue">--</div>
               <div class="progress-bar-mini" style="margin-top: 4px; width: 100%; height: 6px;">
                 <div class="progress-fill" id="globalQuotaBar" style="width: 0%"></div>
               </div>
+              <div id="globalQuotaCacheTime" class="cache-time-hint"></div>
             </div>
           </div>
         </div>
@@ -205,20 +209,6 @@
           </div>
         </div>
         <div id="hourlyUsage" class="log-usage-list">加载中...</div>
-      </div>
-
-      <div class="log-usage-card" style="margin-top: 16px;">
-        <div class="log-usage-head" style="display: flex; justify-content: space-between; align-items: flex-start;">
-          <div>
-            <div class="eyebrow">详细额度</div>
-            <h3>凭证每日额度详情</h3>
-            <p>实时从 Google 查询最新额度（耗时较长）。</p>
-          </div>
-          <button id="loadAllQuotasBtn" class="mini-btn">📥 加载所有额度</button>
-        </div>
-        <div id="allQuotasList" class="quota-grid-list">
-          <div class="quota-placeholder">点击上方按钮加载数据</div>
-        </div>
       </div>
     </section>
 

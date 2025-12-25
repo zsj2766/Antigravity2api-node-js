@@ -33,7 +33,7 @@ const tabPanels = document.querySelectorAll('.tab-panel');
 const deleteDisabledBtn = document.getElementById('deleteDisabledBtn');
 const usageRefreshBtn = document.getElementById('usageRefreshBtn');
 const loadAllQuotasBtn = document.getElementById('loadAllQuotasBtn');
-const allQuotasList = document.getElementById('allQuotasList');
+const globalQuotaCacheTime = document.getElementById('globalQuotaCacheTime');
 const paginationInfo = document.getElementById('paginationInfo');
 const prevPageBtn = document.getElementById('prevPageBtn');
 const nextPageBtn = document.getElementById('nextPageBtn');
@@ -1164,6 +1164,7 @@ async function loadHourlyUsage() {
       .map(item => {
         const percent = Math.min(100, Math.round(((item.count || 0) / limit) * 100));
         const lastUsedText = item.lastUsedAt ? new Date(item.lastUsedAt).toLocaleString() : '暂无';
+        const projectIdSafe = escapeHtml(item.projectId || '');
         return `
           <div class="log-usage-row">
             <div class="log-usage-header">
@@ -1187,6 +1188,7 @@ async function loadHourlyUsage() {
                 <span class="stat-value">${escapeHtml(lastUsedText)}</span>
               </div>
             </div>
+            <div class="quota-inline-container" id="quota-inline-${projectIdSafe}"></div>
           </div>
         `;
       })
@@ -1539,40 +1541,31 @@ if (loadAllQuotasBtn) {
 }
 
 async function loadAllQuotas() {
-  if (!allQuotasList || !accountsData.length) {
-    if (allQuotasList) {
-      allQuotasList.innerHTML = '<div class="quota-placeholder">暂无凭证，请先添加账号</div>';
-    }
-    return;
-  }
+  if (!accountsData.length) return;
 
   const enabledAccounts = accountsData.filter(acc => acc.enable !== false);
-  if (enabledAccounts.length === 0) {
-    allQuotasList.innerHTML = '<div class="quota-placeholder">暂无启用的凭证</div>';
-    return;
-  }
-
-  // 显示加载进度
-  allQuotasList.innerHTML = `
-    <div class="quota-loading-progress">
-      <div class="quota-loading-bar">
-        <div class="quota-loading-fill" id="quotaLoadingFill" style="width: 0%"></div>
-      </div>
-      <div class="quota-loading-text" id="quotaLoadingText">正在加载 0/${enabledAccounts.length} 个凭证的额度...</div>
-    </div>
-  `;
+  if (enabledAccounts.length === 0) return;
 
   if (loadAllQuotasBtn) {
     loadAllQuotasBtn.disabled = true;
     loadAllQuotasBtn.textContent = '加载中...';
   }
 
+  if (globalQuotaCacheTime) {
+    globalQuotaCacheTime.textContent = '正在更新...';
+  }
+
   const quotaResults = [];
-  const loadingFill = document.getElementById('quotaLoadingFill');
-  const loadingText = document.getElementById('quotaLoadingText');
 
   for (let i = 0; i < enabledAccounts.length; i++) {
     const acc = enabledAccounts[i];
+
+    if (loadAllQuotasBtn) {
+      loadAllQuotasBtn.textContent = `加载中 ${i + 1}/${enabledAccounts.length}`;
+    }
+
+    const container = document.getElementById(`quota-inline-${acc.projectId}`);
+
     try {
       const data = await fetchJson(`/admin/tokens/${acc.index}/quotas`, { cache: 'no-store' });
       quotaResults.push({
@@ -1580,91 +1573,37 @@ async function loadAllQuotas() {
         quota: data.data,
         error: null
       });
+
+      // 实时渲染到对应凭证下方
+      if (container) {
+        renderQuota(container, data.data);
+      }
     } catch (e) {
       quotaResults.push({
         account: acc,
         quota: null,
         error: e.message
       });
-    }
 
-    // 更新进度
-    const progress = Math.round(((i + 1) / enabledAccounts.length) * 100);
-    if (loadingFill) loadingFill.style.width = `${progress}%`;
-    if (loadingText) loadingText.textContent = `正在加载 ${i + 1}/${enabledAccounts.length} 个凭证的额度...`;
+      if (container) {
+        container.innerHTML = `<div class="quota-error">加载失败: ${escapeHtml(e.message)}</div>`;
+      }
+    }
   }
 
-  // 渲染结果
-  renderAllQuotas(quotaResults);
+  // 更新全局额度池统计
+  updateGlobalQuotaFromResults(quotaResults);
+
+  // 更新缓存时间
+  if (globalQuotaCacheTime) {
+    const now = new Date().toLocaleTimeString();
+    globalQuotaCacheTime.textContent = `更新于 ${now}`;
+  }
 
   if (loadAllQuotasBtn) {
     loadAllQuotasBtn.disabled = false;
     loadAllQuotasBtn.textContent = '📥 加载所有额度';
   }
-}
-
-function renderAllQuotas(results) {
-  if (!allQuotasList) return;
-
-  if (!results.length) {
-    allQuotasList.innerHTML = '<div class="quota-placeholder">暂无额度数据</div>';
-    return;
-  }
-
-  const html = results.map((item, idx) => {
-    const acc = item.account;
-    const displayName = escapeHtml(getAccountDisplayName(acc));
-    const stats = tokenRuntimeStats[acc.projectId] || { successCount: 0, failureCount: 0, inCooldown: false };
-    const total = stats.successCount + stats.failureCount;
-    const successRate = total > 0 ? Math.round((stats.successCount / total) * 100) : 100;
-    const rateClass = successRate >= 80 ? 'score-high' : successRate >= 50 ? 'score-medium' : 'score-low';
-
-    let contentHtml = '';
-    if (item.error) {
-      contentHtml = `<div class="quota-error">加载失败: ${escapeHtml(item.error)}</div>`;
-    } else if (item.quota) {
-      contentHtml = `<div id="quota-all-${idx}"></div>`;
-    } else {
-      contentHtml = '<div class="quota-error">暂无额度数据</div>';
-    }
-
-    return `
-      <div class="quota-card-mini" data-index="${idx}">
-        <div class="quota-card-header">
-          <span class="quota-card-name" title="${displayName}">${displayName}</span>
-          <div class="quota-card-badges">
-            <span class="score-badge ${rateClass}">成功率: ${successRate}%</span>
-            ${stats.inCooldown ? '<span class="cooldown-badge">❄️ 冷却中</span>' : ''}
-          </div>
-        </div>
-        <div class="quota-card-content">
-          ${contentHtml}
-        </div>
-      </div>
-    `;
-  }).join('');
-
-  allQuotasList.innerHTML = html;
-
-  // 渲染每个凭证的详细额度
-  results.forEach((item, idx) => {
-    if (item.quota) {
-      const container = document.getElementById(`quota-all-${idx}`);
-      if (container) {
-        renderQuota(container, item.quota);
-      }
-    }
-  });
-
-  // 绑定点击展开/折叠事件
-  allQuotasList.querySelectorAll('.quota-card-mini').forEach(card => {
-    card.addEventListener('click', () => {
-      card.classList.toggle('expanded');
-    });
-  });
-
-  // 更新全局额度池统计
-  updateGlobalQuotaFromResults(results);
 }
 
 function updateGlobalQuotaFromResults(results) {
