@@ -1984,14 +1984,14 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
         error.code === 'RATE_LIMITED';
 
       if (!isLastAttempt && isRetryable) {
-        // 记录重试日志
+        // 记录本次失败日志（标记为将要重试）
         logger.warn(`请求失败 (尝试 ${attempt}/${maxAttempts})，正在切换凭证重试: ${error.message}`);
         writeLog({
           success: false,
           status: errorStatus,
           message: error.message,
-          isRetry: true,
-          retryCount: retryCountForLog + 1, // 当前是第 N 次失败，下一次是 N+1
+          isRetry: retryCountForLog > 0,  // 第一次尝试不是重试
+          retryCount: retryCountForLog,
           willRetry: true,
           errorPreview,
           rawResponse
