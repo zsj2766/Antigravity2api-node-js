@@ -192,19 +192,27 @@ class TokenManager {
         sessionId: generateSessionId()
       }));
 
-      // 从日志恢复运行时统计数据 (Fix Issue 1: 服务重启后历史统计丢失)
+      // 从日志恢复冷却状态 (只恢复 lastFailure，清零计数器)
       try {
         const restoredStats = getRecentTokenStats();
         let restoredCount = 0;
         Object.entries(restoredStats).forEach(([key, stats]) => {
-          this.tokenStats.set(key, stats);
-          restoredCount++;
+          // 只恢复 lastFailure 用于冷却判断，其他计数器重启后清零
+          if (stats.lastFailure > 0) {
+            this.tokenStats.set(key, {
+              lastUsed: 0,
+              lastFailure: stats.lastFailure,
+              failureCount: 0,
+              successCount: 0
+            });
+            restoredCount++;
+          }
         });
         if (restoredCount > 0) {
-          log.info(`已从历史日志恢复 ${restoredCount} 个凭证的运行时统计状态`);
+          log.info(`已从历史日志恢复 ${restoredCount} 个凭证的冷却状态`);
         }
       } catch (statsError) {
-        log.warn('从日志恢复统计状态失败:', statsError.message);
+        log.warn('从日志恢复冷却状态失败:', statsError.message);
       }
 
       this.currentIndex = 0;
