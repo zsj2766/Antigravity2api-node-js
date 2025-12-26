@@ -137,7 +137,10 @@ class TokenManager {
   }
 
   reloadConfig() {
+    log.info('TokenManager: reloading config...');
+    const oldSticky = this.MAX_STICKY_USAGE;
     this.updateConfig();
+    log.info(`TokenManager: config reloaded. MAX_STICKY_USAGE: ${oldSticky} -> ${this.MAX_STICKY_USAGE}`);
   }
 
   isWithinHourlyLimit(token) {

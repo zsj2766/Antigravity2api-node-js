@@ -1163,6 +1163,164 @@ button:disabled {
   cursor: help;
 }
 
+.action-cid {
+  cursor: pointer;
+  transition: background 0.2s;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.action-cid:hover {
+  background: var(--accent-border);
+  text-decoration: underline;
+}
+
+/* 日志分组卡片 */
+.log-group-card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 12px;
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+}
+
+.log-group-header {
+  padding: 10px 14px;
+  background: var(--subtle-bg);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+  font-size: 13px;
+  transition: background 0.2s;
+}
+
+.log-group-header:hover {
+  background: var(--accent-bg);
+}
+
+.log-group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.group-toggle-icon {
+  font-size: 10px;
+  color: var(--muted);
+  transition: transform 0.2s ease;
+  width: 12px;
+  text-align: center;
+}
+
+.log-group-card.expanded .group-toggle-icon {
+  transform: rotate(90deg);
+}
+
+.log-group-body {
+  display: none;
+  background: var(--card-bg);
+  padding: 16px 16px 16px 30px;
+  position: relative;
+}
+
+.log-group-card.expanded .log-group-body {
+  display: block;
+}
+
+/* 时间轴线 */
+.log-group-body::before {
+  content: '';
+  position: absolute;
+  top: 16px;
+  bottom: 16px;
+  left: 19px;
+  width: 2px;
+  background: var(--border);
+  z-index: 0;
+}
+
+.timeline-item {
+  position: relative;
+  margin-bottom: 16px;
+}
+
+.timeline-item:last-child {
+  margin-bottom: 0;
+}
+
+/* 时间轴节点 */
+.timeline-marker {
+  position: absolute;
+  left: -16px;
+  top: 14px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--card-bg);
+  z-index: 1;
+  transform: translateX(-50%);
+}
+
+.timeline-marker.success { background: var(--status-ok-text); }
+.timeline-marker.failed { background: var(--status-off-text); }
+
+.timeline-content {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--subtle-bg);
+}
+
+/* 统一详情面板 Tab */
+.detail-tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 12px;
+}
+
+.detail-tab-btn {
+  padding: 8px 16px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--muted);
+  border-radius: 4px 4px 0 0;
+}
+
+.detail-tab-btn:hover {
+  background: var(--subtle-bg);
+}
+
+.detail-tab-btn.active {
+  color: var(--accent-text);
+  border-bottom-color: var(--accent-text);
+  font-weight: 600;
+  background: var(--subtle-bg);
+}
+
+.detail-tab-pane {
+  display: none;
+  animation: fadeIn 0.2s ease;
+}
+
+.detail-tab-pane.active {
+  display: block;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 .log-content {
   display: flex;
   flex-direction: column;

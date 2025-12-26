@@ -1929,6 +1929,8 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
     } catch (error) {
       lastError = error;
       const errorStatus = error.status || error.statusCode || error.response?.status || 500;
+      // Fix: Convert errorStatus to integer early for consistent comparisons
+      const errorStatusInt = parseInt(String(errorStatus), 10);
       const rawResponse = error.rawResponse || null;
       // 截取前 500 字符作为预览，方便在列表页直接查看
       const errorPreview = rawResponse
@@ -1936,7 +1938,7 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
         : null;
 
       // 429 重试策略：遇到 429 先等待后重试一次当前凭证，再次失败才冻结
-      if (token && errorStatus === 429) {
+      if (token && errorStatusInt === 429) {
         const tokenKey = tokenManager.getTokenKey(token);
         if (!retried429Tokens.has(tokenKey)) {
           logger.warn(`凭证 ${tokenKey} 遇到 429，等待 2 秒后重试当前凭证...`);
@@ -1976,8 +1978,8 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
         return;
       }
 
-      // 判断是否可重试
-      const isRetryable = retryStatusCodes.includes(errorStatus) ||
+      // 判断是否可重试 (errorStatusInt already defined above)
+      const isRetryable = retryStatusCodes.includes(errorStatusInt) ||
         error.code === 'TOKEN_DISABLED' ||
         error.code === 'RATE_LIMITED';
 

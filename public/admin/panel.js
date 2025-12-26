@@ -955,12 +955,13 @@ async function fetchLogDetail(logId) {
 function renderLogDetailContent(detail, container) {
   if (!container) return;
   if (!detail) {
-    container.textContent = '未找到日志详情';
+    container.textContent = '未找到详情';
     return;
   }
 
   const requestSnapshot = detail.detail?.request;
   const responseSnapshot = detail.detail?.response;
+  const rawBody = responseSnapshot?.rawBody;
   const modelAnswer =
     responseSnapshot?.modelOutput ||
     responseSnapshot?.body?.modelOutput ||
@@ -968,95 +969,84 @@ function renderLogDetailContent(detail, container) {
     responseSnapshot?.body ||
     responseSnapshot;
 
-  container.innerHTML = `
-    <details class="log-detail-section" open>
-      <summary>模型回答</summary>
-      <div class="log-detail-body">
-        <pre>${formatJson(modelAnswer || '暂无模型回答')}</pre>
-      </div>
-    </details>
+  const isError = !detail.success;
+  const errorSummary = isError ? { status: detail.status, message: detail.message } : null;
 
-    <details class="log-detail-section">
-      <summary>用户完整请求体</summary>
-      <div class="log-detail-body">
-        <pre>${formatJson(requestSnapshot?.body || requestSnapshot || '暂无请求')}</pre>
-      </div>
-    </details>
-
-    <details class="log-detail-section">
-      <summary>全部请求/响应</summary>
-      <div class="log-detail-body">
-        <div class="log-detail-block">
-          <h4>请求</h4>
-          <pre>${formatJson(requestSnapshot)}</pre>
-        </div>
-        <div class="log-detail-block">
-          <h4>响应</h4>
-          <pre>${formatJson(responseSnapshot)}</pre>
-        </div>
-      </div>
-    </details>
-  `;
-}
-
-function renderErrorDetailContent(detail, container) {
-  if (!container) return;
-  if (!detail) {
-    container.textContent = '未找到错误详情';
-    return;
-  }
-
-  const requestSnapshot = detail.detail?.request;
-  const responseSnapshot = detail.detail?.response;
-  const rawBody = responseSnapshot?.rawBody;
-  const errorSummary = { status: detail.status || null, message: detail.message || '未知错误' };
-
-  container.innerHTML = `
-    <div class="log-detail-block">
-      <h4>错误摘要</h4>
-      <pre>${formatJson(errorSummary)}</pre>
+  const tabsHtml = `
+    <div class="detail-tabs">
+      <button class="detail-tab-btn active" data-tab="summary">摘要</button>
+      <button class="detail-tab-btn" data-tab="output">模型输出</button>
+      <button class="detail-tab-btn" data-tab="request">完整请求</button>
+      <button class="detail-tab-btn" data-tab="response">完整响应</button>
     </div>
-    ${
-      rawBody
-        ? `<details class="log-detail-section" open>
-             <summary>原始响应 (Raw Response)</summary>
-             <div class="log-detail-body">
-               <pre>${formatJson(rawBody)}</pre>
-             </div>
-           </details>`
-        : ''
-    }
-    <details class="log-detail-section">
-      <summary>格式化响应内容</summary>
-      <div class="log-detail-body">
-        <pre>${formatJson(responseSnapshot?.body || responseSnapshot || '暂无响应')}</pre>
-      </div>
-    </details>
-    <details class="log-detail-section">
-      <summary>请求快照</summary>
-      <div class="log-detail-body">
-        <pre>${formatJson(requestSnapshot || '暂无请求')}</pre>
-      </div>
-    </details>
   `;
+
+  const summaryContent = isError
+    ? `
+      <div class="log-detail-block">
+        <h4 style="color:var(--status-off-text)">❌ 失败原因</h4>
+        <pre>${formatJson(errorSummary)}</pre>
+      </div>
+      ${rawBody ? `
+      <div class="log-detail-block">
+        <h4>原始响应 (Raw Body)</h4>
+        <pre style="max-height:300px">${escapeHtml(typeof rawBody === 'string' ? rawBody : JSON.stringify(rawBody, null, 2))}</pre>
+      </div>` : ''}
+    `
+    : `
+      <div class="log-detail-block">
+        <h4 style="color:var(--status-ok-text)">✅ 调用成功</h4>
+        <div class="setting-item">
+          <div class="setting-meta">状态码: ${detail.status}</div>
+          <div class="setting-meta">耗时: ${detail.durationMs}ms</div>
+          <div class="setting-meta">模型: ${escapeHtml(detail.model)}</div>
+        </div>
+      </div>
+    `;
+
+  const panesHtml = `
+    <div class="detail-tab-pane active" data-tab="summary">${summaryContent}</div>
+    <div class="detail-tab-pane" data-tab="output"><pre>${formatJson(modelAnswer || '暂无模型回答')}</pre></div>
+    <div class="detail-tab-pane" data-tab="request"><pre>${formatJson(requestSnapshot || '暂无请求数据')}</pre></div>
+    <div class="detail-tab-pane" data-tab="response"><pre>${formatJson(responseSnapshot || '暂无响应数据')}</pre></div>
+  `;
+
+  container.innerHTML = tabsHtml + panesHtml;
+
+  // 绑定 Tab 切换
+  container.querySelectorAll('.detail-tab-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const tab = btn.dataset.tab;
+
+      container.querySelectorAll('.detail-tab-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+
+      container.querySelectorAll('.detail-tab-pane').forEach(p => p.classList.remove('active'));
+      container.querySelector(`.detail-tab-pane[data-tab="${tab}"]`)?.classList.add('active');
+    });
+  });
 }
 
 function bindLogDetailToggles() {
+  // 绑定详情展开/收起
   document.querySelectorAll('.log-detail-toggle')?.forEach(btn => {
-    btn.addEventListener('click', async () => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
       const targetId = btn.dataset.detailTarget;
       const detailEl = document.getElementById(targetId);
       if (!detailEl) return;
+
       const isOpen = detailEl.classList.contains('open');
       if (isOpen) {
         detailEl.classList.remove('open');
         detailEl.style.display = 'none';
-        btn.textContent = '查看请求/响应详情';
+        btn.textContent = '查看详情';
         return;
       }
 
       detailEl.style.display = 'block';
-      detailEl.textContent = '加载中...';
+      detailEl.innerHTML = '<div style="padding:10px;color:var(--muted)">加载中...</div>';
       btn.disabled = true;
       try {
         const detail = await fetchLogDetail(btn.dataset.logId);
@@ -1064,38 +1054,19 @@ function bindLogDetailToggles() {
         detailEl.classList.add('open');
         btn.textContent = '收起详情';
       } catch (e) {
-        detailEl.textContent = '加载详情失败: ' + e.message;
+        detailEl.innerHTML = `<div class="quota-error">加载失败: ${escapeHtml(e.message)}</div>`;
       } finally {
         btn.disabled = false;
       }
     });
   });
 
-  document.querySelectorAll('.log-error-toggle')?.forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const targetId = btn.dataset.errorTarget;
-      const errorEl = document.getElementById(targetId);
-      if (!errorEl) return;
-      const isOpen = errorEl.classList.contains('open');
-      if (isOpen) {
-        errorEl.classList.remove('open');
-        errorEl.style.display = 'none';
-        btn.textContent = '查看错误';
-        return;
-      }
-
-      errorEl.style.display = 'block';
-      errorEl.textContent = '加载中...';
-      btn.disabled = true;
-      try {
-        const detail = await fetchLogDetail(btn.dataset.logId);
-        renderErrorDetailContent(detail, errorEl);
-        errorEl.classList.add('open');
-        btn.textContent = '收起错误';
-      } catch (e) {
-        errorEl.textContent = '加载错误详情失败: ' + e.message;
-      } finally {
-        btn.disabled = false;
+  // 绑定卡片折叠
+  document.querySelectorAll('.log-group-header')?.forEach(header => {
+    header.addEventListener('click', () => {
+      const card = header.closest('.log-group-card');
+      if (card) {
+        card.classList.toggle('expanded');
       }
     });
   });
@@ -1241,111 +1212,136 @@ function renderLogs() {
     return;
   }
 
-  const totalPages = Math.max(1, Math.ceil(filteredLogs.length / LOG_PAGE_SIZE));
+  // 1. 先进行全量分组 (避免分页切断调用链)
+  const groupedData = [];
+  let currentGroup = null;
+
+  filteredLogs.forEach((log) => {
+    const cid = log.correlationId;
+    if (currentGroup && cid && cid === currentGroup.id) {
+      currentGroup.items.push(log);
+    } else {
+      if (currentGroup) groupedData.push(currentGroup);
+      if (cid) {
+        currentGroup = { type: 'group', id: cid, items: [log] };
+      } else {
+        currentGroup = null;
+        groupedData.push({ type: 'single', log });
+      }
+    }
+  });
+  if (currentGroup) groupedData.push(currentGroup);
+
+  // 2. 对分组后的数据进行分页
+  const totalPages = Math.max(1, Math.ceil(groupedData.length / LOG_PAGE_SIZE));
   logCurrentPage = Math.min(Math.max(logCurrentPage, 1), totalPages);
   const start = (logCurrentPage - 1) * LOG_PAGE_SIZE;
-  const pageItems = filteredLogs.slice(start, start + LOG_PAGE_SIZE);
+  const pageGroups = groupedData.slice(start, start + LOG_PAGE_SIZE);
 
-  // 渲染单个日志项的函数
-  const renderLogItem = (log, uniqueIdx) => {
-    const time = log.timestamp ? new Date(log.timestamp).toLocaleString() : '未知时间';
+  // 渲染函数 helper
+  const renderInnerContent = (log, uniqueId, isTimeline = false) => {
+    const time = new Date(log.timestamp).toLocaleString();
     const isRetry = log.isRetry === true;
-    const cls = log.success ? 'log-success' : 'log-fail';
-    const hasError = !log.success;
-    const detailId = `log-detail-${uniqueIdx}`;
-    const errorDetailId = `log-error-${uniqueIdx}`;
-    const statusText = log.status ? `HTTP ${log.status}` : log.success ? '成功' : '失败';
-    const durationText = log.durationMs ? `${log.durationMs} ms` : '未知耗时';
-    const pathText = `${escapeHtml(log.method) || '未知方法'} ${escapeHtml(log.path || log.route) || '未知路径'}`;
-    const cid = log.correlationId || '';
+    const cid = log.correlationId;
 
     let typeLabel = '';
-    if (log.success && isRetry) {
-      typeLabel = `<span class="chip chip-success">重试成功 #${log.retryCount}</span>`;
-    } else if (log.willRetry) {
-      typeLabel = `<span class="chip chip-warning">将重试 #${(log.retryCount || 0) + 1}</span>`;
-    } else if (isRetry) {
-      typeLabel = `<span class="chip chip-warning">重试失败 #${log.retryCount}</span>`;
-    }
+    if (log.success && isRetry) typeLabel = `<span class="chip chip-success">重试成功 #${log.retryCount}</span>`;
+    else if (log.willRetry) typeLabel = `<span class="chip chip-warning">将重试 #${(log.retryCount||0)+1}</span>`;
+    else if (isRetry) typeLabel = `<span class="chip chip-warning">重试失败 #${log.retryCount}</span>`;
 
-    // 可点击的关联 ID (筛选调用链)
-    const cidHtml = cid ? `<span class="log-cid action-cid" title="点击筛选此调用链: ${escapeHtml(cid)}" data-cid="${escapeHtml(cid)}">[${escapeHtml(cid.slice(0, 8))}]</span>` : '';
-
-    const errorHint = hasError && log.message ? `<div class="log-error-hint">失败原因：${escapeHtml(log.message)}</div>` : '';
-
-    const errorPreviewHtml = log.errorPreview
-      ? `<div class="log-error-preview" title="原始错误响应预览">${escapeHtml(log.errorPreview)}</div>`
+    const cidHtml = (!isTimeline && cid)
+      ? `<span class="log-cid action-cid" title="筛选此调用链" data-cid="${escapeHtml(cid)}">[${escapeHtml(cid.slice(0, 8))}]</span>`
       : '';
 
-    const detailButton =
-      log.hasDetail && log.id
-        ? `<button class="mini-btn log-detail-toggle" data-log-id="${log.id}" data-detail-target="${detailId}">查看请求/响应详情</button>
-           <div class="log-detail" id="${detailId}"></div>`
-        : '';
-
-    const errorButton =
-      hasError && log.id
-        ? `<button class="mini-btn log-error-toggle" data-log-id="${log.id}" data-error-target="${errorDetailId}">查看错误</button>
-           <div class="log-error-detail" id="${errorDetailId}"></div>`
-        : '';
+    const errorHint = (!log.success && log.message) ? `<div class="log-error-hint">原因：${escapeHtml(log.message)}</div>` : '';
+    const detailBtn = (log.hasDetail && log.id)
+      ? `<button class="mini-btn log-detail-toggle" data-log-id="${log.id}" data-detail-target="detail-${uniqueId}">查看详情</button>
+         <div class="log-detail" id="detail-${uniqueId}"></div>`
+      : '';
 
     return `
-      <div class="log-item ${cls}" data-correlation-id="${escapeHtml(cid)}">
-        <div class="log-content">
-          <div class="log-time">${time} ${typeLabel} ${cidHtml}</div>
-          <div class="log-meta">
-            模型：${escapeHtml(log.model) || '未知模型'} |
-            项目：${escapeHtml(log.projectId) || '未知项目'}
-            ${log.tokenId ? ` | Token: ${escapeHtml(log.tokenId.slice(-6))}` : ''}
-          </div>
-          <div class="log-meta">${pathText}</div>
-          <div class="log-meta">${statusText} | ${durationText}</div>
-          ${errorHint}
-          ${errorPreviewHtml}
-          ${errorButton}
-          ${detailButton}
+      <div class="log-content">
+        <div class="log-time">${time} ${typeLabel} ${cidHtml}</div>
+        <div class="log-meta">
+          ${escapeHtml(log.model) || '未知'} | ${escapeHtml(log.projectId) || '未知'}
+          ${log.tokenId ? `| Token:${escapeHtml(log.tokenId.slice(-6))}` : ''}
         </div>
-        <div class="log-status">${log.success ? '成功' : '失败'}</div>
+        ${!isTimeline ? `<div class="log-meta">${escapeHtml(log.method) || '未知'} ${escapeHtml(log.path) || '未知'}</div>` : ''}
+        <div class="log-meta">${log.status || (log.success?'成功':'失败')} | ${log.durationMs}ms</div>
+        ${errorHint}
+        ${detailBtn}
       </div>
+      <div class="log-status">${log.success ? '成功' : '失败'}</div>
     `;
   };
 
-  // 分组逻辑：按 correlationId 将连续日志分组 (Fix Issue 2)
-  const groupedItems = [];
-  let currentGroup = null;
+  logsEl.innerHTML = pageGroups.map((group, idx) => {
+    const uniqueIdBase = `${logCurrentPage}-${idx}`;
 
-  pageItems.forEach((log, idx) => {
-    const html = renderLogItem(log, start + idx);
-    const cid = log.correlationId || '';
-
-    if (currentGroup && cid && cid === currentGroup.id) {
-      currentGroup.htmls.push(html);
-    } else {
-      if (currentGroup) groupedItems.push(currentGroup);
-      currentGroup = { id: cid, htmls: [html] };
+    // 单条日志或无 correlationId：普通渲染
+    if (group.type === 'single') {
+      const log = group.log;
+      const cls = log.success ? 'log-success' : 'log-fail';
+      return `<div class="log-item ${cls}">${renderInnerContent(log, uniqueIdBase, false)}</div>`;
     }
-  });
-  if (currentGroup) groupedItems.push(currentGroup);
 
-  logsEl.innerHTML = groupedItems
-    .map(group => {
-      // 只有当组内有多个日志且有 correlationId 时才包裹分组容器
-      if (group.htmls.length > 1 && group.id) {
-        return `<div class="log-group">${group.htmls.join('')}</div>`;
-      }
-      return group.htmls.join('');
-    })
-    .join('');
+    // 分组日志：检查是否只有一条
+    const items = group.items;
+    if (items.length === 1) {
+      const log = items[0];
+      const cls = log.success ? 'log-success' : 'log-fail';
+      return `<div class="log-item ${cls}">${renderInnerContent(log, uniqueIdBase, false)}</div>`;
+    }
+
+    // 多条日志（重试组）：卡片 + 时间轴渲染
+    const first = items[0];
+    const isFinalSuccess = items.some(l => l.success);
+    const cls = isFinalSuccess ? 'log-success' : 'log-fail';
+
+    const timelineHtml = items.map((log, subIdx) => {
+      const markerCls = log.success ? 'success' : 'failed';
+      const itemCls = log.success ? 'log-success' : 'log-fail';
+      return `
+        <div class="timeline-item">
+          <div class="timeline-marker ${markerCls}"></div>
+          <div class="timeline-content ${itemCls}">
+            ${renderInnerContent(log, `${uniqueIdBase}-${subIdx}`, true)}
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    return `
+      <div class="log-group-card ${cls === 'log-success' ? '' : 'expanded'}">
+        <div class="log-group-header">
+          <div class="log-group-title">
+            <span class="group-toggle-icon">▶</span>
+            <span>调用链 ${escapeHtml(group.id.slice(0, 8))}</span>
+            <span class="badge ${isFinalSuccess ? 'badge-success' : 'badge-error'}">
+              ${isFinalSuccess ? '最终成功' : '最终失败'}
+            </span>
+          </div>
+          <div class="log-meta">
+            ${items.length} 次尝试 · ${new Date(first.timestamp).toLocaleTimeString()}
+          </div>
+        </div>
+        <div class="log-group-body">
+           ${timelineHtml}
+        </div>
+      </div>
+    `;
+  }).join('');
 
   if (logPaginationInfo) {
-    logPaginationInfo.textContent = `第 ${logCurrentPage} / ${totalPages} 页，共 ${filteredLogs.length} 条`;
+    logPaginationInfo.textContent = `第 ${logCurrentPage} / ${totalPages} 页，共 ${groupedData.length} 条记录`;
   }
   if (logPrevPageBtn) logPrevPageBtn.disabled = logCurrentPage === 1;
   if (logNextPageBtn) logNextPageBtn.disabled = logCurrentPage === totalPages;
+
   bindLogDetailToggles();
   bindLogCorrelationHighlight();
 
-  // 绑定 CID 点击筛选
+  // 重新绑定 CID 点击
   logsEl.querySelectorAll('.action-cid').forEach(el => {
     el.addEventListener('click', (e) => {
       e.stopPropagation();
