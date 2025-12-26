@@ -479,11 +479,8 @@ export async function generateAssistantResponse(requestBody, token, callback) {
             }
         });
     } catch (error) {
-        // 尝试解析内嵌的 API 错误（例如 429 隐藏在 500 响应体中）
-        if (error.status && error.message && typeof error.message === 'string') {
-            await handleApiError(error, token);
-        }
-        throw error;
+        // 统一通过 handleApiError 标准化所有错误（包括 Axios 原生错误）
+        await handleApiError(error, token);
     }
 
     return { usage: state.usage };
@@ -635,7 +632,7 @@ export async function generateAssistantResponseNoStream(requestBody, token) {
     try {
         data = await callNoStreamApi(requestBody, token);
     } catch (error) {
-        throw error;
+        await handleApiError(error, token);
     }
 
     // 解析响应内容

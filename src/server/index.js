@@ -1637,6 +1637,7 @@ app.use('/admin', (req, res, next) => {
 const createChatCompletionHandler = (resolveToken, options = {}) => async (req, res) => {
   const { messages, model, stream = true, tools, ...params } = req.body || {};
   const startedAt = Date.now();
+  const correlationId = crypto.randomUUID();
   const requestSnapshot = createRequestSnapshot(req);
   let streamEventsForLog = [];
   let responseBodyForLog = null;
@@ -1644,14 +1645,14 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
 
   let token = null;
   const writeLog = ({ success, status, message, isRetry = false, retryCount = 0 }) => {
-    const logMessage = isRetry ? `[重试 ${retryCount}] ${message || ''}` : message;
     appendLog({
       timestamp: new Date().toISOString(),
       model: model || req.body?.model || 'unknown',
       projectId: token?.projectId || null,
       success,
       status,
-      message: logMessage,
+      message,
+      correlationId,
       isRetry,
       retryCount,
       durationMs: Date.now() - startedAt,
@@ -1698,6 +1699,10 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
   let lastError = null;
   const excludedTokenIds = new Set();
 
+  // 429 重试策略状态变量
+  let retryingToken = null;
+  const retried429Tokens = new Set();
+
   while (attempt < maxAttempts) {
     attempt++;
     const isLastAttempt = attempt === maxAttempts;
@@ -1711,7 +1716,13 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
     try {
       if (res.writableEnded || req.destroyed) break;
 
-      token = await resolveToken(req, excludedTokenIds);
+      // 如果有待重试的凭证，优先使用它
+      if (retryingToken) {
+        token = retryingToken;
+        retryingToken = null;
+      } else {
+        token = await resolveToken(req, excludedTokenIds);
+      }
       if (!token) {
         const noTokenError = new Error(
           options.tokenMissingError || '没有可用的 token，请先通过 OAuth 面板或 npm run login 获取。'
@@ -1908,7 +1919,29 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
 
     } catch (error) {
       lastError = error;
-      const errorStatus = error.status || error.statusCode || 500;
+      const errorStatus = error.status || error.statusCode || error.response?.status || 500;
+
+      // 429 重试策略：遇到 429 先等待后重试一次当前凭证，再次失败才冻结
+      if (token && errorStatus === 429) {
+        const tokenKey = tokenManager.getTokenKey(token);
+        if (!retried429Tokens.has(tokenKey)) {
+          logger.warn(`凭证 ${tokenKey} 遇到 429，等待 2 秒后重试当前凭证...`);
+          // 记录 429 日志（标记为将要重试）
+          writeLog({
+            success: false,
+            status: 429,
+            message: `429 限流，等待 2 秒后重试当前凭证`,
+            isRetry: false,
+            retryCount: 0
+          });
+          await new Promise(resolve => setTimeout(resolve, 2000));
+
+          retried429Tokens.add(tokenKey);
+          retryingToken = token;
+          attempt--; // 本次重试不计入总尝试次数
+          continue;
+        }
+      }
 
       // 记录失败统计
       if (token) {

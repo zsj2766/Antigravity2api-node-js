@@ -1146,6 +1146,23 @@ button:disabled {
 /* .log-retry 已弃用，现在统一使用 success/fail 背景，重试状态通过 chip 标签显示 */
 .log-retry { background: var(--chip-warning-bg); border-color: var(--chip-warning-border); }
 
+.log-related-active {
+  background-color: var(--accent-bg) !important;
+  box-shadow: 0 0 0 2px var(--accent-text);
+  border-color: var(--accent-text) !important;
+  transition: all 0.2s ease;
+  z-index: 1;
+}
+
+.log-cid {
+  font-family: monospace;
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0.7;
+  margin-left: 6px;
+  cursor: help;
+}
+
 .log-content {
   display: flex;
   flex-direction: column;

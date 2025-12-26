@@ -358,6 +358,16 @@ class TokenManager {
     this.stickyTokenId = this.getTokenKey(selectedToken);
     this.stickyUsageCount = 1;
 
+    // 预增缓存计数，防止高并发下多个请求在缓存刷新间隔内突破限额
+    const cacheKey = selectedToken.projectId;
+    if (cacheKey) {
+      const cached = this.usageCache.get(cacheKey);
+      if (cached) {
+        cached.count += 1;
+        this.usageCache.set(cacheKey, cached);
+      }
+    }
+
     return this.prepareToken(selectedToken);
   }
 

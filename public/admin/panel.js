@@ -164,7 +164,7 @@ function updateStrategyDisplay() {
 
 function renderUsageCard(account) {
   const { usage = {} } = account;
-  const models = usage.models && usage.models.length > 0 ? usage.models.join(', ') : '暂无数据';
+  const models = usage.models && usage.models.length > 0 ? usage.models.map(escapeHtml).join(', ') : '暂无数据';
   const lastUsed = usage.lastUsedAt ? new Date(usage.lastUsedAt).toLocaleString() : '未使用';
 
   // 运行时统计 - 使用 projectId 作为 key
@@ -1060,12 +1060,16 @@ function renderLogs() {
       const errorDetailId = `log-error-${start + idx}`;
       const statusText = log.status ? `HTTP ${log.status}` : log.success ? '成功' : '失败';
       const durationText = log.durationMs ? `${log.durationMs} ms` : '未知耗时';
-      const pathText = `${log.method || '未知方法'} ${log.path || log.route || '未知路径'}`;
+      const pathText = `${escapeHtml(log.method) || '未知方法'} ${escapeHtml(log.path || log.route) || '未知路径'}`;
+      const cid = log.correlationId || '';
 
       // 类型标签：仅重试请求显示标签，首次请求不显示（保持简洁）
       const typeLabel = isRetry
         ? `<span class="chip chip-warning">重试 #${log.retryCount || 1}</span>`
         : '';
+
+      // 关联 ID 显示 (仅取前8位)
+      const cidHtml = cid ? `<span class="log-cid" title="Request ID: ${escapeHtml(cid)}">[${escapeHtml(cid.slice(0, 8))}]</span>` : '';
 
       const errorHint = hasError && log.message ? `<div class="log-error-hint">失败原因：${escapeHtml(log.message)}</div>` : '';
       const detailButton =
@@ -1081,13 +1085,13 @@ function renderLogs() {
           : '';
 
       return `
-        <div class="log-item ${cls}">
+        <div class="log-item ${cls}" data-correlation-id="${escapeHtml(cid)}">
           <div class="log-content">
-            <div class="log-time">${time} ${typeLabel}</div>
+            <div class="log-time">${time} ${typeLabel} ${cidHtml}</div>
             <div class="log-meta">
-              模型：${log.model || '未知模型'} |
-              项目：${log.projectId || '未知项目'}
-              ${log.tokenId ? ` | Token: ${log.tokenId.slice(-6)}` : ''}
+              模型：${escapeHtml(log.model) || '未知模型'} |
+              项目：${escapeHtml(log.projectId) || '未知项目'}
+              ${log.tokenId ? ` | Token: ${escapeHtml(log.tokenId.slice(-6))}` : ''}
             </div>
             <div class="log-meta">${pathText}</div>
             <div class="log-meta">${statusText} | ${durationText}</div>
@@ -1107,6 +1111,36 @@ function renderLogs() {
   if (logPrevPageBtn) logPrevPageBtn.disabled = logCurrentPage === 1;
   if (logNextPageBtn) logNextPageBtn.disabled = logCurrentPage === totalPages;
   bindLogDetailToggles();
+  bindLogCorrelationHighlight();
+}
+
+function bindLogCorrelationHighlight() {
+  const container = document.getElementById('logs');
+  if (!container || container._correlationHandlerAttached) return;
+
+  container.addEventListener('mouseover', e => {
+    const item = e.target.closest('.log-item');
+    if (!item) return;
+    const cid = item.dataset.correlationId;
+    if (!cid) return;
+
+    container.querySelectorAll(`.log-item[data-correlation-id="${cid}"]`).forEach(el => {
+      el.classList.add('log-related-active');
+    });
+  });
+
+  container.addEventListener('mouseout', e => {
+    const item = e.target.closest('.log-item');
+    if (!item) return;
+    const cid = item.dataset.correlationId;
+    if (!cid) return;
+
+    container.querySelectorAll(`.log-item[data-correlation-id="${cid}"]`).forEach(el => {
+      el.classList.remove('log-related-active');
+    });
+  });
+
+  container._correlationHandlerAttached = true;
 }
 
 async function loadHourlyUsage() {
