@@ -41,7 +41,7 @@ class TokenManager {
       : 20;
     this.cooldownMs = Number.isFinite(Number(config.credentials?.cooldownMs))
       ? Number(config.credentials.cooldownMs)
-      : 5 * 60 * 1000;
+      : 30 * 1000; // 默认冷却 30 秒
     this.MAX_STICKY_USAGE = Number.isFinite(Number(config.credentials?.maxStickyUsage))
       ? Number(config.credentials.maxStickyUsage)
       : 5;
