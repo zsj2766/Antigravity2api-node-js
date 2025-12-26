@@ -1889,3 +1889,105 @@ button:disabled {
     gap: 8px;
   }
 }
+
+/* 模态框样式 */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background: var(--card-bg);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  max-width: 600px;
+  width: 90%;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-header h3 {
+  margin: 0;
+  font-size: 18px;
+  color: var(--text);
+}
+
+.close-btn {
+  background: none;
+  border: none;
+  font-size: 24px;
+  cursor: pointer;
+  color: var(--muted);
+  padding: 0;
+  line-height: 1;
+}
+
+.close-btn:hover {
+  color: var(--text);
+}
+
+.modal-body {
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.modal-hint {
+  color: var(--muted);
+  font-size: 14px;
+  margin: 0 0 16px 0;
+}
+
+.freeze-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.freeze-history-item {
+  background: var(--subtle-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.freeze-history-item .credential-id {
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+
+.freeze-history-item .reason {
+  color: var(--status-off-text);
+  font-size: 14px;
+  margin-bottom: 8px;
+}
+
+.freeze-history-item .time-info {
+  display: flex;
+  gap: 16px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.freeze-history-empty {
+  text-align: center;
+  color: var(--muted);
+  padding: 40px 20px;
+}

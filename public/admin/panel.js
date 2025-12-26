@@ -1212,25 +1212,33 @@ function renderLogs() {
     return;
   }
 
-  // 1. 先进行全量分组 (避免分页切断调用链)
-  const groupedData = [];
-  let currentGroup = null;
+  // 1. 使用 Map 按 correlationId 分组（修复非相邻日志无法分组的问题）
+  const cidGroups = new Map();  // correlationId -> { items: [], firstIndex: number }
+  const singles = [];           // 无 correlationId 的日志
 
-  filteredLogs.forEach((log) => {
+  filteredLogs.forEach((log, index) => {
     const cid = log.correlationId;
-    if (currentGroup && cid && cid === currentGroup.id) {
-      currentGroup.items.push(log);
-    } else {
-      if (currentGroup) groupedData.push(currentGroup);
-      if (cid) {
-        currentGroup = { type: 'group', id: cid, items: [log] };
-      } else {
-        currentGroup = null;
-        groupedData.push({ type: 'single', log });
+    if (cid) {
+      if (!cidGroups.has(cid)) {
+        cidGroups.set(cid, { items: [], firstIndex: index });
       }
+      cidGroups.get(cid).items.push(log);
+    } else {
+      singles.push({ type: 'single', log, sortIndex: index });
     }
   });
-  if (currentGroup) groupedData.push(currentGroup);
+
+  // 2. 合并分组和单条日志，按首条日志的原始顺序排序
+  const groupedData = [];
+  cidGroups.forEach((group, cid) => {
+    // 按时间顺序排列组内日志（旧的在前）
+    group.items.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    groupedData.push({ type: 'group', id: cid, items: group.items, sortIndex: group.firstIndex });
+  });
+  singles.forEach(s => groupedData.push(s));
+
+  // 按原始顺序排序（保持时间倒序展示）
+  groupedData.sort((a, b) => a.sortIndex - b.sortIndex);
 
   // 2. 对分组后的数据进行分页
   const totalPages = Math.max(1, Math.ceil(groupedData.length / LOG_PAGE_SIZE));
@@ -1828,3 +1836,71 @@ loadLogs();
 loadHourlyUsage();
 loadSettings();
 initLogSettingsUI();
+
+// ========== 冻结历史功能 ==========
+const freezeHistoryBtn = document.getElementById('freezeHistoryBtn');
+const freezeHistoryModal = document.getElementById('freezeHistoryModal');
+const closeFreezeHistoryModal = document.getElementById('closeFreezeHistoryModal');
+const freezeHistoryList = document.getElementById('freezeHistoryList');
+
+async function loadFreezeHistory() {
+  if (!freezeHistoryList) return;
+  
+  freezeHistoryList.innerHTML = '<p class="loading">加载中...</p>';
+  
+  try {
+    const { history = [] } = await fetchJson('/auth/accounts/freeze-history');
+    
+    if (history.length === 0) {
+      freezeHistoryList.innerHTML = '<p class="freeze-history-empty">暂无冻结记录</p>';
+      return;
+    }
+    
+    freezeHistoryList.innerHTML = history.map(item => {
+      const freezeTime = new Date(item.freezeTime).toLocaleString();
+      const unfreezeTime = new Date(item.unfreezeTime).toLocaleString();
+      const cooldownSeconds = Math.round(item.cooldownMs / 1000);
+      
+      return '<div class="freeze-history-item">' +
+        '<div class="credential-id">' + escapeHtml(item.credentialId) + '</div>' +
+        '<div class="reason">' + escapeHtml(item.reason) + '</div>' +
+        '<div class="time-info">' +
+          '<span>冻结时间: ' + freezeTime + '</span>' +
+          '<span>解冻时间: ' + unfreezeTime + '</span>' +
+          '<span>冷却: ' + cooldownSeconds + 's</span>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+  } catch (e) {
+    freezeHistoryList.innerHTML = '<p class="freeze-history-empty">加载失败: ' + escapeHtml(e.message) + '</p>';
+  }
+}
+
+function openFreezeHistoryModal() {
+  if (freezeHistoryModal) {
+    freezeHistoryModal.style.display = 'flex';
+    loadFreezeHistory();
+  }
+}
+
+function closeFreezeHistoryModalFn() {
+  if (freezeHistoryModal) {
+    freezeHistoryModal.style.display = 'none';
+  }
+}
+
+if (freezeHistoryBtn) {
+  freezeHistoryBtn.addEventListener('click', openFreezeHistoryModal);
+}
+
+if (closeFreezeHistoryModal) {
+  closeFreezeHistoryModal.addEventListener('click', closeFreezeHistoryModalFn);
+}
+
+if (freezeHistoryModal) {
+  freezeHistoryModal.addEventListener('click', function(e) {
+    if (e.target === freezeHistoryModal) {
+      closeFreezeHistoryModalFn();
+    }
+  });
+}

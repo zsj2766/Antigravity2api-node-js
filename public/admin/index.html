@@ -104,6 +104,7 @@
         <div class="card-actions">
           <div class="action-group">
             <button id="refreshAllBtn" class="refresh-btn">🔁 批量刷新</button>
+            <button id="freezeHistoryBtn" class="refresh-btn">🧊 冻结历史</button>
             <button id="deleteDisabledBtn" class="danger-btn">🗑️ 删除停用凭证</button>
           </div>
           <button id="refreshBtn" class="refresh-btn">刷新列表</button>
@@ -253,6 +254,22 @@
         </div>
       </div>
     </section>
+  </div>
+
+  <!-- 冻结历史模态框 -->
+  <div id="freezeHistoryModal" class="modal-overlay" style="display: none;">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>凭证冻结历史</h3>
+        <button id="closeFreezeHistoryModal" class="close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-hint">记录服务启动以来的凭证冻结事件（重启后清空）</p>
+        <div id="freezeHistoryList" class="freeze-history-list">
+          <p class="loading">加载中...</p>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="/admin/panel.js"></script>

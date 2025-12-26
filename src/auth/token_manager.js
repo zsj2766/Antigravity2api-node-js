@@ -28,6 +28,9 @@ class TokenManager {
     this.usageCache = new Map();
     this.USAGE_CACHE_TTL = 10000; // 10秒缓存
 
+    // 冻结历史记录（服务启动后的记录，重启清空）
+    this.freezeHistory = [];
+
     this.updateConfig();
     this.initialize();
   }
@@ -68,18 +71,38 @@ class TokenManager {
 
   recordFailure(token, statusCode) {
     const stats = this.getStats(token);
+    const key = this.getTokenKey(token);
     stats.lastUsed = Date.now();
     stats.failureCount += 1;
+
     if (statusCode === 429) {
-      stats.lastFailure = Date.now();
+      const freezeTime = Date.now();
+      stats.lastFailure = freezeTime;
+
+      // 记录冻结历史
+      this.freezeHistory.push({
+        credentialId: key,
+        freezeTime: new Date(freezeTime).toISOString(),
+        reason: `429 限流 (连续失败 ${stats.failureCount} 次)`,
+        unfreezeTime: new Date(freezeTime + this.cooldownMs).toISOString(),
+        cooldownMs: this.cooldownMs
+      });
+
+      // 限制历史记录数量，最多保留 100 条
+      if (this.freezeHistory.length > 100) {
+        this.freezeHistory = this.freezeHistory.slice(-100);
+      }
     }
 
     // 失败时重置粘性会话
-    const key = this.getTokenKey(token);
     if (this.stickyTokenId === key) {
       this.stickyTokenId = null;
       this.stickyUsageCount = 0;
     }
+  }
+
+  getFreezeHistory() {
+    return this.freezeHistory.slice().reverse(); // 返回副本，最新的在前
   }
 
   isInCooldown(token) {

@@ -1,0 +1,34 @@
+# Git
+.git
+.gitignore
+
+# Dependencies
+node_modules
+
+# Environment files
+.env
+.env.*
+
+# Documentation
+*.md
+docs/
+
+# Test files
+test/
+*.test.js
+*.spec.js
+
+# Development files
+.vscode/
+.idea/
+*.log
+npm-debug.log
+
+# Scripts (not needed in production)
+scripts/
+
+# Unnecessary binaries for Docker (Linux only)
+src/bin/antigravity_requester_windows_amd64.exe
+
+# Build artifacts
+.ace-tool/

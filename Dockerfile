@@ -15,18 +15,16 @@ RUN npm ci --only=production && \
 # 复制项目文件
 COPY . .
 
-# 根据架构下载对应的二进制文件
+# 根据架构选择二进制文件并清理无用文件
 ARG TARGETPLATFORM
 RUN echo "Building for platform: ${TARGETPLATFORM}" && \
     if [ "${TARGETPLATFORM}" = "linux/arm64" ]; then \
-        echo "ARM64平台 - 使用Android ARM64二进制文件" && \
-        cp src/bin/antigravity_requester_android_arm64 src/bin/antigravity_requester_linux_arm64 && \
-        chmod +x src/bin/antigravity_requester_linux_arm64; \
+        echo "ARM64平台 - 复制 ARM64 二进制文件" && \
+        cp src/bin/antigravity_requester_android_arm64 src/bin/antigravity_requester_linux_arm64 2>/dev/null || true; \
     fi && \
-    chmod +x src/bin/*_amd64 src/bin/*_arm64 2>/dev/null || true
-
-# 创建 data 目录用于存储 accounts.json
-RUN mkdir -p data && \
+    rm -f src/bin/*.exe src/bin/*android* 2>/dev/null || true && \
+    chmod +x src/bin/antigravity_requester_linux_* 2>/dev/null || true && \
+    mkdir -p data && \
     chown -R node:node /app
 
 # 暴露端口

@@ -1,4 +1,6 @@
 import axios from 'axios';
+import http from 'http';
+import https from 'https';
 import tokenManager from '../auth/token_manager.js';
 import config from '../config/config.js';
 import { log } from '../utils/logger.js';
@@ -6,6 +8,23 @@ import { generateRequestId, generateToolCallId } from '../utils/idGenerator.js';
 import AntigravityRequester from '../AntigravityRequester.js';
 import { saveBase64Image } from '../utils/imageStorage.js';
 import { registerTextThoughtSignature, registerThoughtSignature } from '../utils/utils.js';
+
+// HTTP Keep-Alive Agent 配置（复用 TCP 连接提升性能）
+const agentOptions = {
+    keepAlive: true,
+    keepAliveMsecs: 1000,
+    maxSockets: 100,
+    maxFreeSockets: 10,
+    timeout: 60000
+};
+const httpAgent = new http.Agent(agentOptions);
+const httpsAgent = new https.Agent(agentOptions);
+
+// 静态 Headers（避免每次请求重复创建）
+const STATIC_HEADERS = {
+    'Content-Type': 'application/json',
+    'Accept-Encoding': 'gzip'
+};
 
 // 请求客户端：优先使用 AntigravityRequester，失败则降级到 axios
 let requester = null;
@@ -48,11 +67,10 @@ export function refreshApiClientConfig() {
 
 function buildHeaders(token) {
     return {
+        ...STATIC_HEADERS,
         'Host': config.api.host,
         'User-Agent': config.api.userAgent,
-        'Authorization': `Bearer ${token.access_token}`,
-        'Content-Type': 'application/json',
-        'Accept-Encoding': 'gzip'
+        'Authorization': `Bearer ${token.access_token}`
     };
 }
 
@@ -61,12 +79,22 @@ function buildAxiosConfig(url, headers, body = null) {
         method: 'POST',
         url,
         headers,
-        timeout: config.timeout,
-        proxy: config.proxy ? (() => {
-            const proxyUrl = new URL(config.proxy);
-            return { protocol: proxyUrl.protocol.replace(':', ''), host: proxyUrl.hostname, port: parseInt(proxyUrl.port) };
-        })() : false
+        timeout: config.timeout
     };
+
+    // 仅在无 proxy 时使用 Keep-Alive Agent（proxy 与自定义 Agent 存在兼容性问题）
+    if (config.proxy) {
+        const proxyUrl = new URL(config.proxy);
+        axiosConfig.proxy = {
+            protocol: proxyUrl.protocol.replace(':', ''),
+            host: proxyUrl.hostname,
+            port: parseInt(proxyUrl.port)
+        };
+    } else {
+        axiosConfig.httpAgent = httpAgent;
+        axiosConfig.httpsAgent = httpsAgent;
+    }
+
     if (body !== null) axiosConfig.data = body;
     return axiosConfig;
 }
