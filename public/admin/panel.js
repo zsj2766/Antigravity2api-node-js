@@ -76,6 +76,43 @@ if (window.AgTheme) {
   window.AgTheme.bindThemeToggle(themeToggleBtn);
 }
 
+// Inject styles for error preview
+const errorPreviewStyle = document.createElement('style');
+errorPreviewStyle.textContent = `
+  .log-error-preview {
+    margin-top: 6px;
+    padding: 6px;
+    background: var(--subtle-bg, #f3f4f6);
+    border: 1px solid var(--border, #e5e7eb);
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 11px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: var(--muted, #4b5563);
+    max-height: 120px;
+    overflow-y: auto;
+  }
+  .log-item.log-fail .log-error-preview {
+    background: rgba(220, 38, 38, 0.05);
+    border-color: rgba(220, 38, 38, 0.2);
+    color: var(--status-off-text, #dc2626);
+  }
+  .chip-success {
+    background: var(--status-ok-bg);
+    color: var(--status-ok-text);
+    border-color: var(--status-ok-bg);
+  }
+  .log-group {
+    border-left: 3px solid var(--border, #e5e7eb);
+    padding-left: 8px;
+    margin-bottom: 8px;
+    background-color: var(--subtle-bg, rgba(0, 0, 0, 0.02));
+    border-radius: 0 4px 4px 0;
+  }
+`;
+document.head.appendChild(errorPreviewStyle);
+
 function setStatus(text, type = 'info', target = statusEl) {
   if (!target) return;
   if (!text) {
@@ -801,6 +838,7 @@ async function updateSettingValue({ key, label, isSensitive, currentValue }) {
       alert(`⚠️ ${response.error}\n\n请在 docker-compose.yml 的 environment 部分修改此配置：\n${key}=你的值`);
     } else {
       await loadSettings();
+      await loadTokenRuntimeStats();
       setStatus('已保存到 data/config.json。', 'success', settingsStatusEl);
     }
   } catch (e) {
@@ -970,6 +1008,7 @@ function renderErrorDetailContent(detail, container) {
 
   const requestSnapshot = detail.detail?.request;
   const responseSnapshot = detail.detail?.response;
+  const rawBody = responseSnapshot?.rawBody;
   const errorSummary = { status: detail.status || null, message: detail.message || '未知错误' };
 
   container.innerHTML = `
@@ -977,8 +1016,18 @@ function renderErrorDetailContent(detail, container) {
       <h4>错误摘要</h4>
       <pre>${formatJson(errorSummary)}</pre>
     </div>
-    <details class="log-detail-section" open>
-      <summary>响应内容</summary>
+    ${
+      rawBody
+        ? `<details class="log-detail-section" open>
+             <summary>原始响应 (Raw Response)</summary>
+             <div class="log-detail-body">
+               <pre>${formatJson(rawBody)}</pre>
+             </div>
+           </details>`
+        : ''
+    }
+    <details class="log-detail-section">
+      <summary>格式化响应内容</summary>
       <div class="log-detail-body">
         <pre>${formatJson(responseSnapshot?.body || responseSnapshot || '暂无响应')}</pre>
       </div>
@@ -1197,57 +1246,94 @@ function renderLogs() {
   const start = (logCurrentPage - 1) * LOG_PAGE_SIZE;
   const pageItems = filteredLogs.slice(start, start + LOG_PAGE_SIZE);
 
-  logsEl.innerHTML = pageItems
-    .map((log, idx) => {
-      const time = log.timestamp ? new Date(log.timestamp).toLocaleString() : '未知时间';
-      const isRetry = log.isRetry === true;
-      const cls = log.success ? 'log-success' : 'log-fail';
-      const hasError = !log.success;
-      const detailId = `log-detail-${start + idx}`;
-      const errorDetailId = `log-error-${start + idx}`;
-      const statusText = log.status ? `HTTP ${log.status}` : log.success ? '成功' : '失败';
-      const durationText = log.durationMs ? `${log.durationMs} ms` : '未知耗时';
-      const pathText = `${escapeHtml(log.method) || '未知方法'} ${escapeHtml(log.path || log.route) || '未知路径'}`;
-      const cid = log.correlationId || '';
+  // 渲染单个日志项的函数
+  const renderLogItem = (log, uniqueIdx) => {
+    const time = log.timestamp ? new Date(log.timestamp).toLocaleString() : '未知时间';
+    const isRetry = log.isRetry === true;
+    const cls = log.success ? 'log-success' : 'log-fail';
+    const hasError = !log.success;
+    const detailId = `log-detail-${uniqueIdx}`;
+    const errorDetailId = `log-error-${uniqueIdx}`;
+    const statusText = log.status ? `HTTP ${log.status}` : log.success ? '成功' : '失败';
+    const durationText = log.durationMs ? `${log.durationMs} ms` : '未知耗时';
+    const pathText = `${escapeHtml(log.method) || '未知方法'} ${escapeHtml(log.path || log.route) || '未知路径'}`;
+    const cid = log.correlationId || '';
 
-      const typeLabel = isRetry
-        ? `<span class="chip chip-warning">重试 #${log.retryCount || 1}</span>`
+    let typeLabel = '';
+    if (log.success && isRetry) {
+      typeLabel = `<span class="chip chip-success">重试成功 #${log.retryCount}</span>`;
+    } else if (log.willRetry) {
+      typeLabel = `<span class="chip chip-warning">将重试 #${(log.retryCount || 0) + 1}</span>`;
+    } else if (isRetry) {
+      typeLabel = `<span class="chip chip-warning">重试失败 #${log.retryCount}</span>`;
+    }
+
+    // 可点击的关联 ID (筛选调用链)
+    const cidHtml = cid ? `<span class="log-cid action-cid" title="点击筛选此调用链: ${escapeHtml(cid)}" data-cid="${escapeHtml(cid)}">[${escapeHtml(cid.slice(0, 8))}]</span>` : '';
+
+    const errorHint = hasError && log.message ? `<div class="log-error-hint">失败原因：${escapeHtml(log.message)}</div>` : '';
+
+    const errorPreviewHtml = log.errorPreview
+      ? `<div class="log-error-preview" title="原始错误响应预览">${escapeHtml(log.errorPreview)}</div>`
+      : '';
+
+    const detailButton =
+      log.hasDetail && log.id
+        ? `<button class="mini-btn log-detail-toggle" data-log-id="${log.id}" data-detail-target="${detailId}">查看请求/响应详情</button>
+           <div class="log-detail" id="${detailId}"></div>`
         : '';
 
-      // 可点击的关联 ID (筛选调用链)
-      const cidHtml = cid ? `<span class="log-cid action-cid" title="点击筛选此调用链: ${escapeHtml(cid)}" data-cid="${escapeHtml(cid)}">[${escapeHtml(cid.slice(0, 8))}]</span>` : '';
+    const errorButton =
+      hasError && log.id
+        ? `<button class="mini-btn log-error-toggle" data-log-id="${log.id}" data-error-target="${errorDetailId}">查看错误</button>
+           <div class="log-error-detail" id="${errorDetailId}"></div>`
+        : '';
 
-      const errorHint = hasError && log.message ? `<div class="log-error-hint">失败原因：${escapeHtml(log.message)}</div>` : '';
-      const detailButton =
-        log.hasDetail && log.id
-          ? `<button class="mini-btn log-detail-toggle" data-log-id="${log.id}" data-detail-target="${detailId}">查看请求/响应详情</button>
-             <div class="log-detail" id="${detailId}"></div>`
-          : '';
-
-      const errorButton =
-        hasError && log.id
-          ? `<button class="mini-btn log-error-toggle" data-log-id="${log.id}" data-error-target="${errorDetailId}">查看错误</button>
-             <div class="log-error-detail" id="${errorDetailId}"></div>`
-          : '';
-
-      return `
-        <div class="log-item ${cls}" data-correlation-id="${escapeHtml(cid)}">
-          <div class="log-content">
-            <div class="log-time">${time} ${typeLabel} ${cidHtml}</div>
-            <div class="log-meta">
-              模型：${escapeHtml(log.model) || '未知模型'} |
-              项目：${escapeHtml(log.projectId) || '未知项目'}
-              ${log.tokenId ? ` | Token: ${escapeHtml(log.tokenId.slice(-6))}` : ''}
-            </div>
-            <div class="log-meta">${pathText}</div>
-            <div class="log-meta">${statusText} | ${durationText}</div>
-            ${errorHint}
-            ${errorButton}
-            ${detailButton}
+    return `
+      <div class="log-item ${cls}" data-correlation-id="${escapeHtml(cid)}">
+        <div class="log-content">
+          <div class="log-time">${time} ${typeLabel} ${cidHtml}</div>
+          <div class="log-meta">
+            模型：${escapeHtml(log.model) || '未知模型'} |
+            项目：${escapeHtml(log.projectId) || '未知项目'}
+            ${log.tokenId ? ` | Token: ${escapeHtml(log.tokenId.slice(-6))}` : ''}
           </div>
-          <div class="log-status">${log.success ? '成功' : '失败'}</div>
+          <div class="log-meta">${pathText}</div>
+          <div class="log-meta">${statusText} | ${durationText}</div>
+          ${errorHint}
+          ${errorPreviewHtml}
+          ${errorButton}
+          ${detailButton}
         </div>
-      `;
+        <div class="log-status">${log.success ? '成功' : '失败'}</div>
+      </div>
+    `;
+  };
+
+  // 分组逻辑：按 correlationId 将连续日志分组 (Fix Issue 2)
+  const groupedItems = [];
+  let currentGroup = null;
+
+  pageItems.forEach((log, idx) => {
+    const html = renderLogItem(log, start + idx);
+    const cid = log.correlationId || '';
+
+    if (currentGroup && cid && cid === currentGroup.id) {
+      currentGroup.htmls.push(html);
+    } else {
+      if (currentGroup) groupedItems.push(currentGroup);
+      currentGroup = { id: cid, htmls: [html] };
+    }
+  });
+  if (currentGroup) groupedItems.push(currentGroup);
+
+  logsEl.innerHTML = groupedItems
+    .map(group => {
+      // 只有当组内有多个日志且有 correlationId 时才包裹分组容器
+      if (group.htmls.length > 1 && group.id) {
+        return `<div class="log-group">${group.htmls.join('')}</div>`;
+      }
+      return group.htmls.join('');
     })
     .join('');
 

@@ -5,7 +5,7 @@ import axios from 'axios';
 import { log } from '../utils/logger.js';
 import { generateProjectId, generateSessionId } from '../utils/idGenerator.js';
 import config from '../config/config.js';
-import { getUsageCountSince } from '../utils/log_store.js';
+import { getUsageCountSince, getRecentTokenStats } from '../utils/log_store.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -188,6 +188,22 @@ class TokenManager {
         ...token,
         sessionId: generateSessionId()
       }));
+
+      // 从日志恢复运行时统计数据 (Fix Issue 1: 服务重启后历史统计丢失)
+      try {
+        const restoredStats = getRecentTokenStats();
+        let restoredCount = 0;
+        Object.entries(restoredStats).forEach(([key, stats]) => {
+          this.tokenStats.set(key, stats);
+          restoredCount++;
+        });
+        if (restoredCount > 0) {
+          log.info(`已从历史日志恢复 ${restoredCount} 个凭证的运行时统计状态`);
+        }
+      } catch (statsError) {
+        log.warn('从日志恢复统计状态失败:', statsError.message);
+      }
+
       this.currentIndex = 0;
       log.info(`成功加载 ${this.tokens.length} 个可用token`);
     } catch (error) {

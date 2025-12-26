@@ -1644,7 +1644,7 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
   let responseSummaryForLog = null;
 
   let token = null;
-  const writeLog = ({ success, status, message, isRetry = false, retryCount = 0 }) => {
+  const writeLog = ({ success, status, message, isRetry = false, retryCount = 0, willRetry = false, errorPreview = null, rawResponse = null }) => {
     appendLog({
       timestamp: new Date().toISOString(),
       model: model || req.body?.model || 'unknown',
@@ -1655,6 +1655,8 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
       correlationId,
       isRetry,
       retryCount,
+      willRetry,
+      errorPreview,
       durationMs: Date.now() - startedAt,
       path: req.originalUrl,
       method: req.method,
@@ -1664,6 +1666,7 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
           status,
           headers: res.getHeaders ? res.getHeaders() : undefined,
           body: responseBodyForLog,
+          rawBody: rawResponse,
           modelOutput: responseSummaryForLog
         }
       }
@@ -1696,6 +1699,7 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
   const maxAttempts = config.retry?.maxAttempts || 3;
   const retryStatusCodes = config.retry?.statusCodes || [429, 500];
   let attempt = 0;
+  let retryCountForLog = 0; // 独立追踪实际重试次数 (Fix Issue 3: 重试日志计数)
   let lastError = null;
   const excludedTokenIds = new Set();
 
@@ -1914,12 +1918,22 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
 
     // 成功：记录统计并退出
     tokenManager.recordSuccess(token);
-    writeLog({ success: true, status: res.statusCode || 200 });
+    writeLog({
+      success: true,
+      status: res.statusCode || 200,
+      isRetry: retryCountForLog > 0,
+      retryCount: retryCountForLog
+    });
     return;
 
     } catch (error) {
       lastError = error;
       const errorStatus = error.status || error.statusCode || error.response?.status || 500;
+      const rawResponse = error.rawResponse || null;
+      // 截取前 500 字符作为预览，方便在列表页直接查看
+      const errorPreview = rawResponse
+        ? (typeof rawResponse === 'string' ? rawResponse : JSON.stringify(rawResponse)).slice(0, 500)
+        : null;
 
       // 429 重试策略：遇到 429 先等待后重试一次当前凭证，再次失败才冻结
       if (token && errorStatus === 429) {
@@ -1931,14 +1945,18 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
             success: false,
             status: 429,
             message: `429 限流，等待 2 秒后重试当前凭证`,
-            isRetry: false,
-            retryCount: 0
+            isRetry: retryCountForLog > 0,
+            retryCount: retryCountForLog,
+            willRetry: true,
+            errorPreview,
+            rawResponse
           });
           await new Promise(resolve => setTimeout(resolve, 2000));
 
           retried429Tokens.add(tokenKey);
           retryingToken = token;
           attempt--; // 本次重试不计入总尝试次数
+          retryCountForLog++; // 但计入实际重试计数
           continue;
         }
       }
@@ -1951,7 +1969,7 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
 
       // 如果是 NO_TOKEN 错误，无法重试
       if (error.code === 'NO_TOKEN') {
-        writeLog({ success: false, status: errorStatus, message: error.message });
+        writeLog({ success: false, status: errorStatus, message: error.message, errorPreview });
         if (!res.headersSent) {
           res.status(errorStatus).json({ error: error.message });
         }
@@ -1971,23 +1989,35 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
           status: errorStatus,
           message: error.message,
           isRetry: true,
-          retryCount: attempt
+          retryCount: retryCountForLog + 1, // 当前是第 N 次失败，下一次是 N+1
+          willRetry: true,
+          errorPreview,
+          rawResponse
         });
+        retryCountForLog++;
         continue;
       }
 
       // 最后一次尝试或不可重试
       logger.error('生成响应失败:', error.message);
       responseBodyForLog = responseBodyForLog || { error: error.message };
-      writeLog({ success: false, status: errorStatus, message: error.message });
+      writeLog({
+        success: false,
+        status: errorStatus,
+        message: error.message,
+        isRetry: retryCountForLog > 0,
+        retryCount: retryCountForLog,
+        errorPreview,
+        rawResponse
+      });
 
       if (!res.headersSent) {
         const { id, created } = createResponseMeta();
 
         // 构建更详细的错误消息
         let errorContent = `错误: ${error.message}`;
-        if (attempt > 1) {
-          errorContent = `请求失败 (已重试 ${attempt - 1} 次): ${error.message}`;
+        if (retryCountForLog > 0) {
+          errorContent = `请求失败 (已重试 ${retryCountForLog} 次): ${error.message}`;
         }
         if (error.code === 'RATE_LIMITED' && error.retryAfter) {
           const retrySeconds = Math.ceil(error.retryAfter / 1000);

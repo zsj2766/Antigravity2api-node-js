@@ -213,16 +213,20 @@ async function extractErrorDetails(error) {
     let message = error?.message || error?.response?.statusText || 'Unknown error';
     let retryDelayMs = error?.retryDelayMs || null;
     let disableToken = error?.disableToken === true;
+    let rawResponse = null;
 
     if (error?.response?.data?.readable) {
         const chunks = [];
         for await (const chunk of error.response.data) {
             chunks.push(chunk);
         }
-        message = Buffer.concat(chunks).toString();
+        rawResponse = Buffer.concat(chunks).toString();
+        message = rawResponse;
     } else if (typeof error?.response?.data === 'object') {
+        rawResponse = error.response.data;
         message = JSON.stringify(error.response.data, null, 2);
     } else if (error?.response?.data) {
+        rawResponse = error.response.data;
         message = error.response.data;
     } else if (error?.message && error?.message !== message) {
         message = error.message;
@@ -240,7 +244,8 @@ async function extractErrorDetails(error) {
         status: status ?? 'Unknown',
         message,
         retryDelayMs,
-        disableToken
+        disableToken,
+        rawResponse
     };
 }
 
@@ -253,6 +258,7 @@ async function handleApiError(error, token) {
         const err = new Error(`该账号没有使用权限或凭证失效，已自动禁用。错误详情: ${details.message}`);
         err.status = details.status;
         err.code = 'TOKEN_DISABLED';
+        err.rawResponse = details.rawResponse;
         throw err;
     }
 
@@ -260,6 +266,7 @@ async function handleApiError(error, token) {
     err.status = details.status;
     err.retryAfter = details.retryDelayMs;  // 暴露重试延迟（毫秒）
     err.code = details.status === 429 ? 'RATE_LIMITED' : 'API_ERROR';
+    err.rawResponse = details.rawResponse;
     throw err;
 }
 

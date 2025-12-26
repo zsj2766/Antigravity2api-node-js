@@ -269,6 +269,44 @@ export function getUsageCountSince(projectId, sinceTimestampMs) {
   }).length;
 }
 
+export function getRecentTokenStats() {
+  // 按照时间正序重放日志以重建状态
+  const logs = readLogs().sort((a, b) => {
+    const tA = Date.parse(a.timestamp) || 0;
+    const tB = Date.parse(b.timestamp) || 0;
+    return tA - tB;
+  });
+
+  const stats = {};
+
+  logs.forEach(log => {
+    if (!log.projectId) return;
+    const key = log.projectId;
+
+    if (!stats[key]) {
+      stats[key] = { lastUsed: 0, lastFailure: 0, failureCount: 0, successCount: 0 };
+    }
+
+    const s = stats[key];
+    const ts = Date.parse(log.timestamp) || 0;
+
+    // 更新最后使用时间
+    if (ts > s.lastUsed) s.lastUsed = ts;
+
+    if (log.success) {
+      s.successCount++;
+      s.failureCount = 0; // 成功一次即重置连续失败计数
+    } else {
+      s.failureCount++;
+      if (log.status === 429) {
+        if (ts > s.lastFailure) s.lastFailure = ts;
+      }
+    }
+  });
+
+  return stats;
+}
+
 export function getUsageSummary() {
   const logs = readLogs();
   const summary = {};

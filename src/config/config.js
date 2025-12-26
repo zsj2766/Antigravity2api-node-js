@@ -238,13 +238,16 @@ export function updateEnvValues(updates = {}) {
 ensureEnvFile();
 dotenv.config();
 
-let config = loadConfigFromEnv();
+const config = loadConfigFromEnv();
 // 为调试添加标识
 config._debugId = `config-${Date.now()}`;
 log.info(`[DEBUG config] 初始化 config 对象, _debugId = ${config._debugId}, imageBaseUrl = "${config.imageBaseUrl}"`);
 
 export function reloadConfigFromEnv() {
-  config = loadConfigFromEnv();
+  const newConfig = loadConfigFromEnv();
+  // 使用 Object.assign 就地更新，确保所有模块持有的引用都能看到新值
+  Object.assign(config, newConfig);
+
   config._debugId = `config-${Date.now()}`;
   log.info(`[DEBUG config] 重新加载后 config 对象, _debugId = ${config._debugId}, imageBaseUrl = "${config.imageBaseUrl}"`);
   log.info('✓ 配置已重新加载');
