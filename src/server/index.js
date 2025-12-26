@@ -433,10 +433,51 @@ const createResponseMeta = () => ({
   created: Math.floor(Date.now() / 1000)
 });
 
+// Calculate retry delay: respect retry-after header, or use exponential backoff with jitter
+const calculateRetryDelay = (attempt, error) => {
+  const initialDelay = 1000;
+  const maxDelay = 10000;
+
+  // 1. Check retry-after from error object (already parsed by client.js)
+  if (error?.retryAfter && typeof error.retryAfter === 'number') {
+    return error.retryAfter; // Already in milliseconds
+  }
+
+  // 2. Check retry-after header directly
+  const retryAfter = error?.response?.headers?.['retry-after'] || error?.headers?.['retry-after'];
+  if (retryAfter) {
+    const delay = parseInt(retryAfter, 10);
+    if (!isNaN(delay)) return delay * 1000; // seconds to ms
+  }
+
+  // 3. Fallback: Exponential backoff with jitter
+  const backoff = Math.min(initialDelay * Math.pow(2, attempt), maxDelay);
+  const jitter = Math.random() * 1000;
+  return backoff + jitter;
+};
+
 const setStreamHeaders = res => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
+
+  // Heartbeat: send SSE comment every 15s to keep connection alive
+  if (!res.locals) res.locals = {};
+  if (!res.locals.heartbeatTimer) {
+    res.locals.heartbeatTimer = setInterval(() => {
+      if (!res.writableEnded && res.headersSent) {
+        res.write(': keep-alive\n\n');
+      }
+    }, 15000);
+
+    // Ensure timer is cleared if request closes unexpectedly
+    res.on('close', () => {
+      if (res.locals?.heartbeatTimer) {
+        clearInterval(res.locals.heartbeatTimer);
+        res.locals.heartbeatTimer = null;
+      }
+    });
+  }
 };
 
 const createStreamChunk = (id, created, model, delta, finish_reason = null, usage = null) => ({
@@ -453,6 +494,11 @@ const writeStreamData = (res, data) => {
 };
 
 const endStream = (res, id, created, model, finish_reason, usage = null) => {
+  // Clear heartbeat timer before ending stream
+  if (res.locals?.heartbeatTimer) {
+    clearInterval(res.locals.heartbeatTimer);
+    res.locals.heartbeatTimer = null;
+  }
   writeStreamData(res, createStreamChunk(id, created, model, {}, finish_reason, usage));
   res.write('data: [DONE]\n\n');
   res.end();
@@ -1637,7 +1683,7 @@ app.use('/admin', (req, res, next) => {
 const createChatCompletionHandler = (resolveToken, options = {}) => async (req, res) => {
   const { messages, model, stream = true, tools, ...params } = req.body || {};
   const startedAt = Date.now();
-  const correlationId = crypto.randomUUID();
+  const correlationId = req.headers['x-correlation-id'] || req.headers['x-request-id'] || crypto.randomUUID();
   const requestSnapshot = createRequestSnapshot(req);
   let streamEventsForLog = [];
   let responseBodyForLog = null;
@@ -1821,12 +1867,13 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
     const { id, created } = createResponseMeta();
 
     if (stream) {
-      setStreamHeaders(res);
+      // Headers will be sent on first data chunk to enable retry on 429
 
       if (isImageModel) {
         // 图像模型使用流式API，实现思维链实时传输
         const imageUrls = [];
         const { usage } = await generateAssistantResponse(requestBody, token, data => {
+          if (!res.headersSent) setStreamHeaders(res);
           streamEventsForLog.push(data);
 
           if (data.type === 'thinking') {
@@ -1847,12 +1894,14 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
           writeStreamData(res, createStreamChunk(id, created, model, { content: markdown }));
         }
 
+        if (!res.headersSent) setStreamHeaders(res);
         endStream(res, id, created, model, 'stop', usage);
         responseBodyForLog = { stream: true, image: true, usage, events: streamEventsForLog };
         responseSummaryForLog = summarizeStreamEvents(streamEventsForLog);
       } else {
         let hasToolCall = false;
         const { usage } = await generateAssistantResponse(requestBody, token, data => {
+          if (!res.headersSent) setStreamHeaders(res);
           streamEventsForLog.push(data);
 
           let delta = {};
@@ -1884,6 +1933,7 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
             writeStreamData(res, createStreamChunk(id, created, model, delta));
           }
         });
+        if (!res.headersSent) setStreamHeaders(res);
         endStream(res, id, created, model, hasToolCall ? 'tool_calls' : 'stop', usage);
         responseBodyForLog = { stream: true, events: streamEventsForLog, usage };
         responseSummaryForLog = summarizeStreamEvents(streamEventsForLog);
@@ -1941,19 +1991,20 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
       if (token && errorStatusInt === 429) {
         const tokenKey = tokenManager.getTokenKey(token);
         if (!retried429Tokens.has(tokenKey)) {
-          logger.warn(`凭证 ${tokenKey} 遇到 429，等待 2 秒后重试当前凭证...`);
+          const delay = calculateRetryDelay(attempt, error);
+          logger.warn(`凭证 ${tokenKey} 遇到 429，等待 ${Math.round(delay)}ms 后重试当前凭证...`);
           // 记录 429 日志（标记为将要重试）
           writeLog({
             success: false,
             status: 429,
-            message: `429 限流，等待 2 秒后重试当前凭证`,
+            message: `429 限流，等待 ${Math.round(delay)}ms 后重试当前凭证`,
             isRetry: retryCountForLog > 0,
             retryCount: retryCountForLog,
             willRetry: true,
             errorPreview,
             rawResponse
           });
-          await new Promise(resolve => setTimeout(resolve, 2000));
+          await new Promise(resolve => setTimeout(resolve, delay));
 
           retried429Tokens.add(tokenKey);
           retryingToken = token;
