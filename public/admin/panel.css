@@ -1528,6 +1528,155 @@ button:disabled {
   color: var(--muted);
 }
 
+/* 日志筛选栏 */
+.log-filter-bar {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.filter-top-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.filter-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.filter-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.filter-chip {
+  background: var(--neutral-btn-bg);
+  color: var(--neutral-btn-text);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.filter-chip:hover {
+  background: var(--neutral-btn-hover);
+}
+
+.filter-chip.active {
+  background: var(--accent-text);
+  color: var(--card-bg);
+  border-color: var(--accent-text);
+}
+
+.filter-bottom-row {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+
+.filter-bottom-row.show {
+  display: flex;
+}
+
+.date-input {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  background: var(--card-bg);
+  color: var(--text);
+  min-width: 160px;
+}
+
+.date-sep {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.filter-info-row {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+
+.filter-info-row.show {
+  display: flex;
+}
+
+.chain-badge {
+  background: var(--accent-bg);
+  color: var(--accent-text);
+  border: 1px solid var(--accent-border);
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-family: monospace;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mini-btn-icon {
+  background: transparent;
+  border: none;
+  padding: 2px 4px;
+  font-size: 14px;
+  cursor: pointer;
+  color: var(--muted);
+  border-radius: 4px;
+  transition: all 0.15s ease;
+}
+
+.mini-btn-icon:hover {
+  background: var(--neutral-btn-bg);
+  color: var(--text);
+}
+
+/* 可点击的关联 ID */
+.action-cid {
+  font-family: monospace;
+  font-size: 11px;
+  color: var(--accent-text);
+  background: var(--accent-bg);
+  padding: 1px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  margin-left: 6px;
+}
+
+.action-cid:hover {
+  background: var(--accent-border);
+  text-decoration: underline;
+}
+
 @media (max-width: 640px) {
   .account-item,
   .card-header,

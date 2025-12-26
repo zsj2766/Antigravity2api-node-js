@@ -8,12 +8,6 @@ const refreshAllBtn = document.getElementById('refreshAllBtn');
 const logsRefreshBtn = document.getElementById('logsRefreshBtn');
 const logsClearBtn = document.getElementById('logsClearBtn');
 const hourlyUsageEl = document.getElementById('hourlyUsage');
-const nextTokenDisplay = document.getElementById('nextTokenDisplay');
-const nextTokenDesc = document.getElementById('nextTokenDesc');
-const globalQuotaValue = document.getElementById('globalQuotaValue');
-const globalQuotaBar = document.getElementById('globalQuotaBar');
-const globalHealthValue = document.getElementById('globalHealthValue');
-const globalHealthBar = document.getElementById('globalHealthBar');
 const manageStatusEl = document.getElementById('manageStatus');
 const callbackUrlInput = document.getElementById('callbackUrlInput');
 const customProjectIdInput = document.getElementById('customProjectIdInput');
@@ -33,7 +27,6 @@ const tabPanels = document.querySelectorAll('.tab-panel');
 const deleteDisabledBtn = document.getElementById('deleteDisabledBtn');
 const usageRefreshBtn = document.getElementById('usageRefreshBtn');
 const loadAllQuotasBtn = document.getElementById('loadAllQuotasBtn');
-const globalQuotaCacheTime = document.getElementById('globalQuotaCacheTime');
 const paginationInfo = document.getElementById('paginationInfo');
 const prevPageBtn = document.getElementById('prevPageBtn');
 const nextPageBtn = document.getElementById('nextPageBtn');
@@ -61,7 +54,16 @@ let filteredAccounts = [];
 let currentPage = 1;
 const LOG_PAGE_SIZE = 20;
 let logsData = [];
+let filteredLogs = [];
 let logCurrentPage = 1;
+let logFilters = {
+  type: 'all',
+  status: 'all',
+  time: 'all',
+  customStart: null,
+  customEnd: null,
+  correlationId: null
+};
 let statusFilter = 'all';
 let errorOnly = false;
 const logDetailCache = new Map();
@@ -570,7 +572,6 @@ async function refreshAccounts() {
     accountsData = authData.accounts || [];
     updateFilteredAccounts();
     loadHourlyUsage();
-    loadGlobalOverview();
   } catch (e) {
     listEl.textContent = '加载失败: ' + e.message;
   }
@@ -839,6 +840,25 @@ function initLogSettingsUI() {
   const span = document.createElement('span');
   span.textContent = '调用日志级别';
 
+  const select = document.createElement('select');
+  select.className = 'input select';
+  select.style.margin = '0';
+  select.style.width = 'auto';
+  select.style.fontSize = '12px';
+  select.style.padding = '4px 24px 4px 8px';
+
+  const options = [
+    { value: 'all', text: '全部 (All)' },
+    { value: 'error', text: '仅错误 (Error Only)' },
+    { value: 'off', text: '关闭 (Off)' }
+  ];
+
+  options.forEach(opt => {
+    const option = document.createElement('option');
+    option.value = opt.value;
+    option.textContent = opt.text;
+    select.appendChild(option);
+  });
 
   label.appendChild(span);
   label.appendChild(select);
@@ -878,8 +898,7 @@ async function loadLogs() {
   try {
     const data = await fetchJson('/admin/logs?limit=200');
     logsData = data.logs || [];
-    logCurrentPage = 1;
-    renderLogs();
+    applyLogFilters();
   } catch (e) {
     logsEl.textContent = '加载日志失败: ' + e.message;
     if (logPaginationInfo) logPaginationInfo.textContent = '';
@@ -1033,27 +1052,155 @@ function bindLogDetailToggles() {
   });
 }
 
+function initLogFilters() {
+  const logsBody = document.querySelector('.logs-body');
+  if (!logsBody || document.querySelector('.log-filter-bar')) return;
+
+  const bar = document.createElement('div');
+  bar.className = 'log-filter-bar';
+  bar.innerHTML = `
+    <div class="filter-top-row">
+      <div class="filter-section">
+        <span class="filter-label">类型</span>
+        <div class="filter-chips" data-group="type">
+          <button class="filter-chip active" data-val="all">全部</button>
+          <button class="filter-chip" data-val="normal">普通</button>
+          <button class="filter-chip" data-val="retry">重试</button>
+        </div>
+      </div>
+      <div class="filter-section">
+        <span class="filter-label">状态</span>
+        <div class="filter-chips" data-group="status">
+          <button class="filter-chip active" data-val="all">全部</button>
+          <button class="filter-chip" data-val="success">成功</button>
+          <button class="filter-chip" data-val="failed">失败</button>
+        </div>
+      </div>
+      <div class="filter-section">
+        <span class="filter-label">时间</span>
+        <div class="filter-chips" data-group="time">
+          <button class="filter-chip active" data-val="all">全部</button>
+          <button class="filter-chip" data-val="1h">1h</button>
+          <button class="filter-chip" data-val="6h">6h</button>
+          <button class="filter-chip" data-val="24h">24h</button>
+          <button class="filter-chip" data-val="7d">7d</button>
+          <button class="filter-chip" data-val="custom">自定义</button>
+        </div>
+      </div>
+    </div>
+    <div class="filter-bottom-row" id="customDateRow" style="display:none">
+       <input type="datetime-local" id="filterStart" class="date-input">
+       <span class="date-sep">至</span>
+       <input type="datetime-local" id="filterEnd" class="date-input">
+    </div>
+    <div class="filter-info-row">
+       <div id="filterResultCount"></div>
+       <div id="activeChainBadge" class="chain-badge" style="display:none">
+          <span>链: <span id="chainCid"></span></span>
+          <button id="clearChainBtn" class="mini-btn-icon" title="清除筛选">✕</button>
+       </div>
+    </div>
+  `;
+
+  const pagination = logsBody.querySelector('.logs-pagination');
+  if (pagination) {
+    logsBody.insertBefore(bar, pagination);
+  } else {
+    logsBody.prepend(bar);
+  }
+
+  bar.querySelectorAll('.filter-chips button').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+       const group = e.target.closest('.filter-chips').dataset.group;
+       const val = e.target.dataset.val;
+       e.target.parentNode.querySelectorAll('.filter-chip').forEach(b => b.classList.remove('active'));
+       e.target.classList.add('active');
+       logFilters[group] = val;
+       if (group === 'time') {
+          document.getElementById('customDateRow').style.display = val === 'custom' ? 'flex' : 'none';
+       }
+       applyLogFilters();
+    });
+  });
+
+  const onDateChange = () => {
+     const d1 = document.getElementById('filterStart').value;
+     const d2 = document.getElementById('filterEnd').value;
+     logFilters.customStart = d1 ? new Date(d1).getTime() : null;
+     logFilters.customEnd = d2 ? new Date(d2).getTime() : null;
+     applyLogFilters();
+  };
+  document.getElementById('filterStart').addEventListener('change', onDateChange);
+  document.getElementById('filterEnd').addEventListener('change', onDateChange);
+
+  document.getElementById('clearChainBtn').addEventListener('click', () => {
+      logFilters.correlationId = null;
+      applyLogFilters();
+  });
+}
+
+function applyLogFilters() {
+  const now = Date.now();
+  filteredLogs = logsData.filter(log => {
+      if (logFilters.type === 'normal' && log.isRetry) return false;
+      if (logFilters.type === 'retry' && !log.isRetry) return false;
+      if (logFilters.status === 'success' && !log.success) return false;
+      if (logFilters.status === 'failed' && log.success) return false;
+
+      const t = log.timestamp ? new Date(log.timestamp).getTime() : 0;
+      if (logFilters.time !== 'all' && logFilters.time !== 'custom') {
+          let windowMs = 0;
+          if (logFilters.time === '1h') windowMs = 3600 * 1000;
+          if (logFilters.time === '6h') windowMs = 6 * 3600 * 1000;
+          if (logFilters.time === '24h') windowMs = 24 * 3600 * 1000;
+          if (logFilters.time === '7d') windowMs = 7 * 24 * 3600 * 1000;
+          if (t < now - windowMs) return false;
+      }
+      if (logFilters.time === 'custom') {
+          if (logFilters.customStart && t < logFilters.customStart) return false;
+          if (logFilters.customEnd && t > logFilters.customEnd) return false;
+      }
+      if (logFilters.correlationId && log.correlationId !== logFilters.correlationId) return false;
+      return true;
+  });
+
+  const countEl = document.getElementById('filterResultCount');
+  if (countEl) countEl.textContent = `显示 ${filteredLogs.length} / ${logsData.length} 条`;
+
+  const infoRow = document.querySelector('.filter-info-row');
+  if (infoRow) infoRow.classList.add('show');
+
+  const chainBadge = document.getElementById('activeChainBadge');
+  if (chainBadge) {
+      chainBadge.style.display = logFilters.correlationId ? 'inline-flex' : 'none';
+      const cidSpan = document.getElementById('chainCid');
+      if (cidSpan) cidSpan.textContent = logFilters.correlationId ? logFilters.correlationId.slice(0,8) : '';
+  }
+
+  logCurrentPage = 1;
+  renderLogs();
+}
+
 function renderLogs() {
   if (!logsEl) return;
 
-  if (!logsData.length) {
-    logsEl.textContent = '暂无调用日志';
+  if (!filteredLogs.length) {
+    logsEl.textContent = logsData.length ? '没有符合筛选条件的日志' : '暂无调用日志';
     if (logPaginationInfo) logPaginationInfo.textContent = '第 0 / 0 页';
     if (logPrevPageBtn) logPrevPageBtn.disabled = true;
     if (logNextPageBtn) logNextPageBtn.disabled = true;
     return;
   }
 
-  const totalPages = Math.max(1, Math.ceil(logsData.length / LOG_PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(filteredLogs.length / LOG_PAGE_SIZE));
   logCurrentPage = Math.min(Math.max(logCurrentPage, 1), totalPages);
   const start = (logCurrentPage - 1) * LOG_PAGE_SIZE;
-  const pageItems = logsData.slice(start, start + LOG_PAGE_SIZE);
+  const pageItems = filteredLogs.slice(start, start + LOG_PAGE_SIZE);
 
   logsEl.innerHTML = pageItems
     .map((log, idx) => {
       const time = log.timestamp ? new Date(log.timestamp).toLocaleString() : '未知时间';
       const isRetry = log.isRetry === true;
-      // 方案调整：只区分成功/失败背景，不再使用 log-retry 橙色背景
       const cls = log.success ? 'log-success' : 'log-fail';
       const hasError = !log.success;
       const detailId = `log-detail-${start + idx}`;
@@ -1063,13 +1210,12 @@ function renderLogs() {
       const pathText = `${escapeHtml(log.method) || '未知方法'} ${escapeHtml(log.path || log.route) || '未知路径'}`;
       const cid = log.correlationId || '';
 
-      // 类型标签：仅重试请求显示标签，首次请求不显示（保持简洁）
       const typeLabel = isRetry
         ? `<span class="chip chip-warning">重试 #${log.retryCount || 1}</span>`
         : '';
 
-      // 关联 ID 显示 (仅取前8位)
-      const cidHtml = cid ? `<span class="log-cid" title="Request ID: ${escapeHtml(cid)}">[${escapeHtml(cid.slice(0, 8))}]</span>` : '';
+      // 可点击的关联 ID (筛选调用链)
+      const cidHtml = cid ? `<span class="log-cid action-cid" title="点击筛选此调用链: ${escapeHtml(cid)}" data-cid="${escapeHtml(cid)}">[${escapeHtml(cid.slice(0, 8))}]</span>` : '';
 
       const errorHint = hasError && log.message ? `<div class="log-error-hint">失败原因：${escapeHtml(log.message)}</div>` : '';
       const detailButton =
@@ -1106,12 +1252,21 @@ function renderLogs() {
     .join('');
 
   if (logPaginationInfo) {
-    logPaginationInfo.textContent = `第 ${logCurrentPage} / ${totalPages} 页，共 ${logsData.length} 条`;
+    logPaginationInfo.textContent = `第 ${logCurrentPage} / ${totalPages} 页，共 ${filteredLogs.length} 条`;
   }
   if (logPrevPageBtn) logPrevPageBtn.disabled = logCurrentPage === 1;
   if (logNextPageBtn) logNextPageBtn.disabled = logCurrentPage === totalPages;
   bindLogDetailToggles();
   bindLogCorrelationHighlight();
+
+  // 绑定 CID 点击筛选
+  logsEl.querySelectorAll('.action-cid').forEach(el => {
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      logFilters.correlationId = e.target.dataset.cid;
+      applyLogFilters();
+    });
+  });
 }
 
 function bindLogCorrelationHighlight() {
@@ -1157,29 +1312,23 @@ async function loadHourlyUsage() {
     const merged = (accountsData.length ? accountsData : Array.from(usageMap.values()))
       .map(acc => {
         const projectId = acc.projectId || acc.project || acc.id || '未知项目';
-        const stats = usageMap.get(projectId) || acc || {};
-        const usage = acc.usage || {};
+        const stats = usageMap.get(projectId) || {};
 
-        const totalCalls = usage.total ?? stats.count ?? 0;
-        const successCalls = usage.success ?? stats.success ?? 0;
-        const failedCalls = usage.failed ?? stats.failed ?? 0;
-        const lastUsedAt = usage.lastUsedAt || stats.lastUsedAt || null;
+        // 使用 60 分钟窗口数据，保持一致性
+        const hourlyCount = stats.count || 0;
+        const hourlySuccess = stats.success || 0;
+        const hourlyFailed = stats.failed || 0;
+        const lastUsedAt = stats.lastUsedAt || null;
 
-        const hasActivity =
-          (stats.count || 0) > 0 ||
-          (totalCalls || 0) > 0 ||
-          (successCalls || 0) > 0 ||
-          (failedCalls || 0) > 0 ||
-          !!lastUsedAt;
+        const hasActivity = hourlyCount > 0 || !!lastUsedAt;
 
         return {
           projectId,
           index: acc.index,
           label: getAccountDisplayName(acc),
-          count: stats.count || 0,
-          success: successCalls,
-          failed: failedCalls,
-          total: totalCalls,
+          count: hourlyCount,
+          success: hourlySuccess,
+          failed: hourlyFailed,
           lastUsedAt,
           hasActivity
         };
@@ -1220,10 +1369,6 @@ async function loadHourlyUsage() {
               <div class="progress" style="width:${percent}%;"></div>
             </div>
             <div class="log-usage-stats">
-              <div class="log-usage-stat">
-                <span class="stat-label">总调用</span>
-                <span class="stat-value">${item.total || 0}</span>
-              </div>
               <div class="log-usage-stat">
                 <span class="stat-label">成功 / 失败</span>
                 <span class="stat-value">${item.success || 0} / ${item.failed || 0}</span>
@@ -1277,102 +1422,6 @@ async function loadHourlyUsage() {
     });
   } catch (e) {
     hourlyUsageEl.textContent = '加载用量失败: ' + e.message;
-  }
-}
-
-async function loadGlobalOverview() {
-  if (!nextTokenDisplay) return;
-
-  // 1. 预测下一次调用
-  try {
-    const candidates = accountsData
-      .filter(acc => acc.enable)
-      .map(acc => {
-        const stats = tokenRuntimeStats[acc.projectId] || { successCount: 0, failureCount: 0, lastUsed: 0, inCooldown: false };
-        const total = stats.successCount + stats.failureCount;
-        const successRate = total > 0 ? Math.round((stats.successCount / total) * 100) : 100;
-        return {
-          ...acc,
-          successRate,
-          lastUsed: stats.lastUsed || 0,
-          inCooldown: stats.inCooldown
-        };
-      });
-
-    if (candidates.length === 0) {
-      nextTokenDisplay.textContent = '无可用凭证';
-      nextTokenDesc.textContent = '请先添加或启用凭证';
-    } else {
-      // 模拟后端的排序逻辑：优先未冷却，其次按 LRU（最久未使用的优先）
-      candidates.sort((a, b) => {
-        if (a.inCooldown !== b.inCooldown) return a.inCooldown ? 1 : -1;
-        return a.lastUsed - b.lastUsed; // LRU: 最久未使用的在前
-      });
-
-      const best = candidates[0];
-      const displayName = getAccountDisplayName(best);
-      nextTokenDisplay.textContent = displayName;
-      nextTokenDisplay.title = displayName;
-
-      let statusText = `成功率: ${best.successRate}%`;
-      if (best.inCooldown) statusText += ' (冷却中)';
-      nextTokenDesc.textContent = statusText;
-    }
-  } catch (e) {
-    nextTokenDisplay.textContent = '预测失败';
-    console.error('预测下一凭证失败:', e);
-  }
-
-  // 2. 更新凭证健康度（基于运行时成功率）
-  try {
-    const enabledAccounts = accountsData.filter(acc => acc.enable);
-    const totalCount = accountsData.length;
-
-    if (totalCount === 0 || enabledAccounts.length === 0) {
-      if (globalHealthValue) globalHealthValue.textContent = '--%';
-      if (globalHealthBar) globalHealthBar.style.width = '0%';
-      if (globalQuotaValue) globalQuotaValue.textContent = '--%';
-      if (globalQuotaBar) globalQuotaBar.style.width = '0%';
-    } else {
-      // 计算健康度（基于运行时成功率）
-      let totalSuccessRate = 0;
-      let validCount = 0;
-      enabledAccounts.forEach(acc => {
-        const stats = tokenRuntimeStats[acc.projectId];
-        if (stats) {
-          const total = stats.successCount + stats.failureCount;
-          const rate = total > 0 ? (stats.successCount / total) * 100 : 100;
-          totalSuccessRate += rate;
-          validCount++;
-        }
-      });
-
-      if (validCount > 0) {
-        const avgRate = Math.round(totalSuccessRate / validCount);
-        if (globalHealthValue) globalHealthValue.textContent = `${avgRate}%`;
-        if (globalHealthBar) {
-          globalHealthBar.style.width = `${avgRate}%`;
-          if (avgRate > 80) globalHealthBar.style.backgroundColor = '#10b981';
-          else if (avgRate > 50) globalHealthBar.style.backgroundColor = '#f59e0b';
-          else globalHealthBar.style.backgroundColor = '#ef4444';
-        }
-      } else {
-        // 无运行时数据时显示 100%
-        if (globalHealthValue) globalHealthValue.textContent = '100%';
-        if (globalHealthBar) {
-          globalHealthBar.style.width = '100%';
-          globalHealthBar.style.backgroundColor = '#10b981';
-        }
-      }
-
-      // 真实额度：显示"点击刷新"提示，实际数据需要异步加载
-      if (globalQuotaValue) globalQuotaValue.textContent = '--';
-      if (globalQuotaBar) globalQuotaBar.style.width = '0%';
-    }
-  } catch (e) {
-    if (globalHealthValue) globalHealthValue.textContent = '错误';
-    if (globalQuotaValue) globalQuotaValue.textContent = '错误';
-    console.error('更新概览失败:', e);
   }
 }
 
@@ -1497,7 +1546,7 @@ if (logPrevPageBtn) {
 
 if (logNextPageBtn) {
   logNextPageBtn.addEventListener('click', () => {
-    const totalPages = Math.max(1, Math.ceil(logsData.length / LOG_PAGE_SIZE));
+    const totalPages = Math.max(1, Math.ceil(filteredLogs.length / LOG_PAGE_SIZE));
     logCurrentPage = Math.min(totalPages, logCurrentPage + 1);
     renderLogs();
   });
@@ -1552,7 +1601,6 @@ if (refreshBtn) {
     refreshAccounts();
     loadLogs();
     loadHourlyUsage();
-    loadGlobalOverview();
   });
 }
 
@@ -1605,7 +1653,7 @@ if (usageRefreshBtn) {
     try {
       usageRefreshBtn.disabled = true;
       usageRefreshBtn.textContent = '刷新中...';
-      await Promise.all([loadHourlyUsage(), loadGlobalOverview()]);
+      await loadHourlyUsage();
       setStatus('用量已刷新', 'success', usageStatusEl);
     } catch (e) {
       setStatus('刷新用量失败: ' + e.message, 'error', usageStatusEl);
@@ -1629,10 +1677,6 @@ async function loadAllQuotas() {
   if (loadAllQuotasBtn) {
     loadAllQuotasBtn.disabled = true;
     loadAllQuotasBtn.textContent = '加载中...';
-  }
-
-  if (globalQuotaCacheTime) {
-    globalQuotaCacheTime.textContent = '正在更新...';
   }
 
   const quotaResults = [];
@@ -1663,57 +1707,9 @@ async function loadAllQuotas() {
     }
   }
 
-  // 更新全局额度池统计
-  updateGlobalQuotaFromResults(quotaResults);
-
-  // 更新缓存时间
-  if (globalQuotaCacheTime) {
-    const now = new Date().toLocaleTimeString();
-    globalQuotaCacheTime.textContent = `更新于 ${now}`;
-  }
-
   if (loadAllQuotasBtn) {
     loadAllQuotasBtn.disabled = false;
     loadAllQuotasBtn.textContent = '📥 加载所有额度';
-  }
-}
-
-function updateGlobalQuotaFromResults(results) {
-  if (!globalQuotaValue || !globalQuotaBar) return;
-
-  // 计算平均剩余额度
-  let totalRemaining = 0;
-  let modelCount = 0;
-
-  results.forEach(item => {
-    if (item.quota && !item.error && item.quota.models) {
-      // 遍历所有模型的额度
-      Object.values(item.quota.models).forEach(modelInfo => {
-        if (modelInfo && typeof modelInfo.remaining === 'number') {
-          // 确保 remaining 在 0-1 之间
-          const val = Math.max(0, Math.min(1, modelInfo.remaining));
-          totalRemaining += val;
-          modelCount++;
-        }
-      });
-    }
-  });
-
-  if (modelCount > 0) {
-    // 计算平均剩余比例（remaining 是 0-1 的比例值）
-    const avgRemaining = totalRemaining / modelCount;
-    const avgPercent = Math.min(100, Math.round(avgRemaining * 100));
-
-    globalQuotaValue.textContent = `${avgPercent}%`;
-    globalQuotaBar.style.width = `${avgPercent}%`;
-
-    // 颜色指示
-    if (avgPercent > 50) globalQuotaBar.style.backgroundColor = '#10b981';
-    else if (avgPercent > 20) globalQuotaBar.style.backgroundColor = '#f59e0b';
-    else globalQuotaBar.style.backgroundColor = '#ef4444';
-  } else {
-    globalQuotaValue.textContent = '无数据';
-    globalQuotaBar.style.width = '0%';
   }
 }
 
@@ -1745,8 +1741,8 @@ if (settingsGrid) {
 }
 
 refreshAccounts();
+initLogFilters();
 loadLogs();
 loadHourlyUsage();
-loadGlobalOverview();
 loadSettings();
 initLogSettingsUI();

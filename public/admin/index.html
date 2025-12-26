@@ -164,42 +164,6 @@
         <span id="usageStatus" class="badge" style="display:none;"></span>
       </div>
 
-      <div class="overview-card">
-        <div class="overview-item">
-          <div class="overview-icon">⏭️</div>
-          <div class="overview-content">
-            <div class="overview-label">下一次调用预测</div>
-            <div class="overview-value" id="nextTokenDisplay">--</div>
-            <div class="overview-desc" id="nextTokenDesc">正在计算...</div>
-          </div>
-        </div>
-        <div class="overview-item">
-          <div class="overview-icon">📊</div>
-          <div class="overview-content overview-split-container">
-            <!-- 凭证健康度 -->
-            <div class="overview-split-item">
-              <div class="overview-label" data-tooltip="基于所有启用凭证的运行时成功率计算&#10;服务重启后重置">凭证健康度</div>
-              <div class="overview-value" id="globalHealthValue">--%</div>
-              <div class="progress-bar-mini" style="margin-top: 4px; width: 100%; height: 6px;">
-                <div class="progress-fill" id="globalHealthBar" style="width: 0%"></div>
-              </div>
-            </div>
-
-            <div class="overview-divider"></div>
-
-            <!-- API 额度 -->
-            <div class="overview-split-item">
-              <div class="overview-label" data-tooltip="所有启用凭证的平均剩余 API 配额&#10;点击加载所有额度获取数据">API 额度池</div>
-              <div class="overview-value" id="globalQuotaValue">--</div>
-              <div class="progress-bar-mini" style="margin-top: 4px; width: 100%; height: 6px;">
-                <div class="progress-fill" id="globalQuotaBar" style="width: 0%"></div>
-              </div>
-              <div id="globalQuotaCacheTime" class="cache-time-hint"></div>
-            </div>
-          </div>
-        </div>
-      </div>
-
       <div class="log-usage-card">
         <div class="log-usage-head">
           <div>
