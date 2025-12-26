@@ -1999,13 +1999,6 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
           const delay = calculateRetryDelay(attempt, error);
           logger.warn(`凭证 ${tokenKey} 遇到 429，等待 ${Math.round(delay)}ms 后重试当前凭证...`);
 
-          // 如果是流式请求，立即发送 Headers 和心跳，防止客户端超时断开
-          if (stream && !res.headersSent) {
-            setStreamHeaders(res);
-            // 发送 SSE 注释作为心跳，确保客户端收到响应头并保持连接
-            res.write(': retry_wait\n\n');
-          }
-
           // 记录 429 日志（标记为将要重试）
           writeLog({
             success: false,
@@ -2048,12 +2041,6 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
         error.code === 'RATE_LIMITED';
 
       if (!isLastAttempt && isRetryable) {
-        // 如果是流式请求，发送心跳防止客户端超时
-        if (stream && !res.headersSent) {
-          setStreamHeaders(res);
-          res.write(': switching_credential\n\n');
-        }
-
         // 记录本次失败日志（标记为将要重试）
         logger.warn(`请求失败 (尝试 ${attempt}/${maxAttempts})，正在切换凭证重试: ${error.message}`);
         writeLog({
