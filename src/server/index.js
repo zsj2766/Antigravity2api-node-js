@@ -12,17 +12,17 @@ import {
   closeRequester,
   refreshApiClientConfig
 } from '../api/client.js';
-import { generateRequestBody, generateRequestBodyFromGemini } from '../utils/utils.js';
-import { saveBase64Image } from '../utils/imageStorage.js';
-import { generateProjectId } from '../utils/idGenerator.js';
+import { generateRequestBodyFromGemini } from '../utils/utils.js';
 import {
-  mapClaudeToOpenAI,
-  mapClaudeToolsToOpenAITools,
-  countClaudeTokens,
+  generateRequestBody,
+  generateRequestBodyFromAnthropic,
   ClaudeSseEmitter,
+  countClaudeTokens,
   buildClaudeContentBlocks,
   estimateTokensFromText
-} from '../utils/claudeAdapter.js';
+} from '../utils/converters/index.js';
+import { saveBase64Image } from '../utils/imageStorage.js';
+import { generateProjectId } from '../utils/idGenerator.js';
 import logger from '../utils/logger.js';
 import {
   loadDataConfig,
@@ -1920,8 +1920,15 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
                 function: toolCall.function
               }))
             };
+          } else if (data.type === 'reasoning') {
+            // OpenAI Responses API reasoning 格式透传
+            delta = {
+              type: 'reasoning',
+              id: data.id,
+              summary: data.summary
+            };
           } else if (data.type === 'thinking') {
-            // 思维链内容直接放入 reasoning_content（不包含标签）
+            // 旧版兼容：思维链内容放入 reasoning_content
             const cleanContent = data.content.replace(/^<思考>\n?|\n?<\/思考>$/g, '');
             delta = { reasoning_content: cleanContent };
           } else if (data.type === 'text') {
@@ -2596,7 +2603,7 @@ app.post('/v1/messages/count_tokens', (req, res) => {
     writeLog({ success: true, status: res.statusCode || 200 });
   } catch (error) {
     const status = 400;
-    const message = error?.message || '璁＄畻澶辫触';
+    const message = error?.message || '计算失败';
     res.status(status).json({ error: message });
     writeLog({ success: false, status, message });
   }
@@ -2607,14 +2614,14 @@ app.post('/v1/messages', async (req, res) => {
   const requestSnapshot = createRequestSnapshot(req);
   let responseBodyForLog = null;
   let token = null;
-  let openaiReq = null;
   let requestBody = null;
-  let clientModelForLog = null;
+  const claudeBody = req.body || {};
+  const clientModelForLog = claudeBody.model;
 
   const writeLog = ({ success, status, message }) => {
     appendLog({
       timestamp: new Date().toISOString(),
-      model: clientModelForLog || openaiReq?.model || req.body?.model || 'unknown',
+      model: clientModelForLog || 'unknown',
       projectId: token?.projectId || null,
       success,
       status,
@@ -2650,40 +2657,10 @@ app.post('/v1/messages', async (req, res) => {
   };
 
   try {
-    openaiReq = mapClaudeToOpenAI(req.body || {});
-    clientModelForLog = openaiReq.model;
-
-    // 兼容模型别名后缀 -1k/-2k/-4k：用于指定分辨率，发送给上游时去掉后缀
-    let upstreamModel = openaiReq.model;
-    let imageSizeFromModel = null;
-    if (typeof upstreamModel === 'string') {
-      const match = upstreamModel.match(/^(.*-image)(?:-(1k|2k|4k))$/i);
-      if (match) {
-        upstreamModel = match[1];
-        imageSizeFromModel = match[2].toUpperCase(); // 1K/2K/4K
-      }
-    }
-    // 若通过模型后缀指定分辨率且请求未显式携带，则补充 image_size 参数
-    if (imageSizeFromModel) {
-      const hasImageSize =
-        openaiReq.image_size ||
-        openaiReq.imageSize ||
-        openaiReq?.generation_config?.image_size ||
-        openaiReq?.generation_config?.imageSize ||
-        openaiReq?.generation_config?.image_config?.image_size ||
-        openaiReq?.generation_config?.image_config?.imageSize ||
-        openaiReq?.generationConfig?.image_size ||
-        openaiReq?.generationConfig?.imageSize ||
-        openaiReq?.generationConfig?.image_config?.image_size ||
-        openaiReq?.generationConfig?.image_config?.imageSize;
-      if (!hasImageSize) {
-        openaiReq.image_size = imageSizeFromModel;
-      }
-    }
-    openaiReq.model = upstreamModel;
+    // 计算输入 token
     const tokenStats = (() => {
       try {
-        return countClaudeTokens(req.body || {});
+        return countClaudeTokens(claudeBody);
       } catch {
         return { input_tokens: 0 };
       }
@@ -2691,27 +2668,21 @@ app.post('/v1/messages', async (req, res) => {
 
     token = await tokenManager.getToken();
     if (!token) {
-      const message = '娌℃湁鍙敤鐨?token锛岃鍏堥€氳繃 OAuth 闈㈡澘鎴?npm run login 鑾峰彇銆?';
+      const message = '没有可用的 token，请先通过 OAuth 面板或 npm run login 获取。';
       res.status(503).json({ error: message });
       writeLog({ success: false, status: 503, message });
       return;
     }
 
-    const openaiTools = mapClaudeToolsToOpenAITools(req.body?.tools || []);
-    requestBody = generateRequestBody(
-      openaiReq.messages,
-      openaiReq.model,
-      openaiReq,
-      openaiTools,
-      token
-    );
-
+    // 直接使用 Anthropic → Gemini 转换，不再经过 OpenAI 中间层
+    requestBody = generateRequestBodyFromAnthropic(claudeBody, token);
     const requestId = requestBody.requestId;
+    const isStream = claudeBody.stream !== false;
 
-    if (openaiReq.stream) {
+    if (isStream) {
       setStreamHeaders(res);
       const emitter = new ClaudeSseEmitter(res, requestId, {
-        model: openaiReq.model,
+        model: claudeBody.model,
         inputTokens: tokenStats?.input_tokens || 0
       });
       emitter.start();
@@ -2743,7 +2714,7 @@ app.post('/v1/messages', async (req, res) => {
         id: `msg_${requestId}`,
         type: 'message',
         role: 'assistant',
-        model: openaiReq.model,
+        model: claudeBody.model,
         content: contentBlocks,
         stop_reason: result.toolCalls?.length ? 'tool_use' : 'end_turn',
         stop_sequence: null,
@@ -2758,10 +2729,10 @@ app.post('/v1/messages', async (req, res) => {
       writeLog({ success: true, status: res.statusCode || 200 });
     }
   } catch (error) {
-    logger.error('/v1/messages 璇锋眰澶辫触:', error?.message || error);
+    logger.error('/v1/messages 请求失败:', error?.message || error);
     const status = error?.statusCode || 500;
     if (!res.headersSent) {
-      res.status(status).json({ error: error?.message || '鏈嶅姟鍣ㄥけ璐?' });
+      res.status(status).json({ error: error?.message || '服务器失败' });
     }
     writeLog({ success: false, status, message: error?.message });
   }

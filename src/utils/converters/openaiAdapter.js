@@ -8,7 +8,7 @@
 
 import config from '../../config/config.js';
 import { generateRequestId, isThinkingModel, generateGenerationConfig } from '../utils.js';
-import { generateToolCallId } from '../idGenerator.js';
+import { generateToolCallId, generateReasoningId } from '../idGenerator.js';
 import { extractImagesFromContent, cleanJsonSchema } from './common/index.js';
 import {
   getThoughtSignature,
@@ -338,7 +338,14 @@ function parseGeminiStreamToOpenAI(line, state, callback) {
       for (const part of parts) {
         if (part.thought === true) {
           if (part.text) {
-            callback({ type: 'thinking', content: part.text });
+            if (!state.reasoningId) {
+              state.reasoningId = generateReasoningId();
+            }
+            callback({
+              type: 'reasoning',
+              id: state.reasoningId,
+              summary: [{ type: 'summary_text', text: part.text }]
+            });
           }
         } else if (part.text !== undefined) {
           if (part.thoughtSignature) {
@@ -487,13 +494,17 @@ function convertGeminiPartsToOpenAIContent(parts) {
   for (const part of parts) {
     if (!part) continue;
 
-    // 文本内容
-    if (part.text !== undefined) {
-      contentParts.push({ type: 'text', text: part.text });
+    // 思考内容（转为 OpenAI Reasoning 结构）- 必须在普通文本前检查
+    if (part.thought === true && part.text) {
+      contentParts.push({
+        type: 'reasoning',
+        id: generateReasoningId(),
+        summary: [{ type: 'summary_text', text: part.text }]
+      });
     }
-    // 思考内容（转为带标记的文本）
-    else if (part.thought === true && part.text) {
-      contentParts.push({ type: 'text', text: `<thinking>${part.text}</thinking>` });
+    // 文本内容
+    else if (part.text !== undefined) {
+      contentParts.push({ type: 'text', text: part.text });
     }
     // 内联数据（图片/文档）
     else if (part.inlineData) {
