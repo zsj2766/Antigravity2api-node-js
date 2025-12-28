@@ -215,11 +215,22 @@ function convertOpenAIToolCallsToClaude(toolCalls) {
  * @returns {object} - Claude tool_result 块
  */
 function convertOpenAIToolResultToClaude(message) {
-  return {
+  const content = message.content || '';
+  // 检测 Error: 前缀 (不区分大小写)
+  const isError = /^error:\s*/i.test(content);
+
+  const result = {
     type: 'tool_result',
     tool_use_id: message.tool_call_id,
-    content: message.content || ''
+    content: content
   };
+
+  // 仅在检测到错误时添加 is_error 字段
+  if (isError) {
+    result.is_error = true;
+  }
+
+  return result;
 }
 
 /**

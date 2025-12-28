@@ -103,7 +103,8 @@ function parseClaudeContentBlocks(content) {
           tool_use_id: block.tool_use_id,
           content: mediaContent.text || '',
           images: mediaContent.images || [],
-          documents: mediaContent.documents || []
+          documents: mediaContent.documents || [],
+          is_error: block.is_error
         });
         break;
 
@@ -148,13 +149,19 @@ function handleClaudeUserMessage(parsed, antigravityMessages, enableThinking) {
     }
 
     // 构建 functionResponse，包含嵌套的图片和文档
+    // 处理 is_error 标志，添加统一前缀
+    let outputContent = toolResult.content;
+    if (toolResult.is_error) {
+      outputContent = `Error: ${outputContent}`;
+    }
+
     const responseParts = [
       {
         functionResponse: {
           id: toolResult.tool_use_id,
           name: functionName,
           response: {
-            output: toolResult.content
+            output: outputContent
           }
         }
       }

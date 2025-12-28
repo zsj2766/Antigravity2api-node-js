@@ -157,7 +157,8 @@ function extractToolResults(content) {
     .filter(b => b && b.type === 'tool_result')
     .map(b => ({
       tool_use_id: b.tool_use_id,
-      content: typeof b.content === 'string' ? b.content : JSON.stringify(b.content || '')
+      content: typeof b.content === 'string' ? b.content : JSON.stringify(b.content || ''),
+      is_error: b.is_error
     }));
 }
 
@@ -210,10 +211,15 @@ export function mapClaudeToOpenAI(body, triggerSignal) {
       if (toolResults.length > 0) {
         // 将 tool_result 转为 OpenAI tool 消息
         for (const tr of toolResults) {
+          let content = tr.content;
+          // 处理 is_error，添加统一前缀
+          if (tr.is_error) {
+            content = `Error: ${content}`;
+          }
           messages.push({
             role: 'tool',
             tool_call_id: tr.tool_use_id,
-            content: tr.content
+            content: content
           });
         }
 
