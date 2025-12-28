@@ -21,7 +21,13 @@ import {
   convertClaudeImageToOpenAI,
   extractMediaFromToolResult,
   resolveReasoningEffort,
-  mapOpenAIToClaude
+  mapOpenAIToClaude,
+  writeSSE,
+  buildMessageStartPayload,
+  estimateTokensFromText,
+  countClaudeTokens,
+  convertToolCallsToClaudeBlocks,
+  buildClaudeContentBlocks
 } from './common/index.js';
 import { safeJsonStringify, safeJsonParse } from '../utils.js';
 
@@ -331,111 +337,8 @@ export function mapClaudeToolsToOpenAITools(tools = []) {
 
 // ==================== 响应转换：OpenAI → Claude ====================
 
-/**
- * 将 OpenAI 工具调用转换为 Claude 格式块
- */
-export function convertToolCallsToClaudeBlocks(toolCalls = []) {
-  return (toolCalls || []).map(call => {
-    const args = safeJsonParse(call?.function?.arguments, call?.function?.arguments || {});
-    return {
-      type: 'tool_use',
-      id: call?.id || generateToolUseId(),
-      name: call?.function?.name || 'tool',
-      input: args || {}
-    };
-  });
-}
-
-/**
- * 估算文本 token 数量
- */
-export function estimateTokensFromText(text) {
-  if (!text) return 0;
-  const normalized = typeof text === 'string' ? text : JSON.stringify(text);
-  return Math.max(1, Math.ceil(normalized.length / 4));
-}
-
-/**
- * 从 Claude 消息中提取文本
- */
-function extractTextFromClaudeMessages(messages = []) {
-  return messages
-    .map(msg => {
-      if (typeof msg?.content === 'string') return msg.content;
-      if (!Array.isArray(msg?.content)) return '';
-      return msg.content
-        .map(block => {
-          if (!block || typeof block !== 'object') return '';
-          if (block.type === 'text') return block.text || '';
-          if (block.type === 'thinking') return block.thinking || '';
-          if (block.type === 'tool_use') {
-            return `[tool_use: ${block.name}]`;
-          }
-          if (block.type === 'tool_result') {
-            return `[tool_result: ${block.tool_use_id}]`;
-          }
-          return '';
-        })
-        .join('');
-    })
-    .join('\n');
-}
-
-/**
- * 计算 Claude 请求的 token 数量
- */
-export function countClaudeTokens(request) {
-  if (!request || !Array.isArray(request.messages)) {
-    throw new Error('messages 不能为空');
-  }
-
-  let totalText = extractTextFromClaudeMessages(request.messages);
-
-  if (request.system) {
-    const systemText = Array.isArray(request.system)
-      ? request.system.map(block => (typeof block === 'string' ? block : block?.text || '')).join('\n')
-      : request.system;
-    totalText += `\n${systemText || ''}`;
-  }
-
-  if (request.tools && request.tools.length > 0) {
-    totalText += `\n${JSON.stringify(request.tools)}`;
-  }
-
-  const inputTokens = estimateTokensFromText(totalText);
-
-  return {
-    input_tokens: inputTokens,
-    token_count: inputTokens,
-    tokens: inputTokens
-  };
-}
-
-// ==================== SSE 响应构建 ====================
-
-function buildMessageStartPayload(requestId, model, inputTokens = 0) {
-  return {
-    type: 'message_start',
-    message: {
-      id: `msg_${requestId}`,
-      type: 'message',
-      role: 'assistant',
-      model: model || 'claude-proxy',
-      stop_sequence: null,
-      usage: {
-        input_tokens: inputTokens || 0,
-        output_tokens: 0
-      },
-      content: [],
-      stop_reason: null
-    }
-  };
-}
-
-function writeSSE(res, event, data) {
-  res.write(`event: ${event}\n`);
-  res.write(`data: ${JSON.stringify(data)}\n\n`);
-}
+// 从 common/sseUtils.js 再导出以保持 API 兼容性
+export { convertToolCallsToClaudeBlocks, estimateTokensFromText, countClaudeTokens, buildClaudeContentBlocks };
 
 /**
  * Claude SSE 响应发射器类
@@ -587,18 +490,4 @@ export class ClaudeToOpenaiSseEmitter {
     writeSSE(this.res, 'message_stop', { type: 'message_stop' });
     this.res.end();
   }
-}
-
-/**
- * 构建 Claude 内容块
- */
-export function buildClaudeContentBlocks(content, toolCalls = []) {
-  const blocks = [];
-  if (content) {
-    blocks.push({ type: 'text', text: content });
-  }
-  if (toolCalls && toolCalls.length > 0) {
-    blocks.push(...convertToolCallsToClaudeBlocks(toolCalls));
-  }
-  return blocks;
 }

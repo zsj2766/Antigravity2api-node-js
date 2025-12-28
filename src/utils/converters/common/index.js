@@ -8,3 +8,4 @@ export * from './configBuilder.js';
 export * from './messageUtils.js';
 export * from './thinkingConfig.js';
 export * from './stopReasonMapper.js';
+export * from './sseUtils.js';
