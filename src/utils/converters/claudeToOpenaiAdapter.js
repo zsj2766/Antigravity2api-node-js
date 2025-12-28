@@ -16,7 +16,7 @@
  * - redacted_thinking: 隐藏的思考内容
  */
 
-import { generateRequestId } from '../idGenerator.js';
+import { generateRequestId, generateToolCallId, generateToolUseId } from '../idGenerator.js';
 import {
   convertClaudeImageToOpenAI,
   extractMediaFromToolResult,
@@ -41,7 +41,7 @@ function extractToolUsesAsOpenAIToolCalls(blocks) {
   return blocks
     .filter(b => b && b.type === 'tool_use')
     .map(b => ({
-      id: b.id || `call_${generateRequestId()}`,
+      id: b.id || generateToolCallId(),
       type: 'function',
       function: {
         name: b.name || 'unknown',
@@ -332,7 +332,7 @@ export function convertToolCallsToClaudeBlocks(toolCalls = []) {
     const args = safeJsonParse(call?.function?.arguments, call?.function?.arguments || {});
     return {
       type: 'tool_use',
-      id: call?.id || `toolu_${generateRequestId()}`,
+      id: call?.id || generateToolUseId(),
       name: call?.function?.name || 'tool',
       input: args || {}
     };
@@ -510,7 +510,7 @@ export class ClaudeToOpenaiSseEmitter {
         index,
         content_block: {
           type: 'tool_use',
-          id: call.id || `toolu_${generateRequestId()}`,
+          id: call.id || generateToolUseId(),
           name: call?.function?.name || 'tool',
           input: {}
         }

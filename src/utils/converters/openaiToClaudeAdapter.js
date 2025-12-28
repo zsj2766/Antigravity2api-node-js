@@ -13,7 +13,7 @@
  * - tool role: 工具结果
  */
 
-import { generateRequestId } from '../idGenerator.js';
+import { generateRequestId, generateToolUseId } from '../idGenerator.js';
 import { resolveThinkingBudget } from './common/index.js';
 
 import {
@@ -202,7 +202,7 @@ function convertOpenAIToolCallsToClaude(toolCalls) {
     const args = safeJsonParse(tc?.function?.arguments, {});
     return {
       type: 'tool_use',
-      id: tc.id || `toolu_${generateRequestId()}`,
+      id: tc.id || generateToolUseId(),
       name: tc.function?.name || 'unknown',
       input: args
     };

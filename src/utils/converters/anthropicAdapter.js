@@ -8,7 +8,7 @@
  */
 
 import config from '../../config/config.js';
-import { generateRequestId } from '../idGenerator.js';
+import { generateRequestId, generateToolUseId } from '../idGenerator.js';
 import {
   isThinkingModel,
   generateGenerationConfig,
@@ -90,7 +90,7 @@ function parseClaudeContentBlocks(content) {
 
       case 'tool_use':
         result.toolCalls.push({
-          id: block.id || `toolu_${generateRequestId()}`,
+          id: block.id || generateToolUseId(),
           name: block.name,
           input: block.input || {}
         });
@@ -474,7 +474,7 @@ function convertToolCallsToClaudeBlocks(toolCalls = []) {
     const args = safeJsonParse(call?.function?.arguments);
     return {
       type: 'tool_use',
-      id: call?.id || `toolu_${generateRequestId()}`,
+      id: call?.id || generateToolUseId(),
       name: call?.function?.name || 'tool',
       input: args || {}
     };
@@ -598,7 +598,7 @@ class ClaudeSseEmitter {
         index,
         content_block: {
           type: 'tool_use',
-          id: call.id || `toolu_${generateRequestId()}`,
+          id: call.id || generateToolUseId(),
           name: call?.function?.name || 'tool',
           input: {}
         }
@@ -713,7 +713,7 @@ function convertGeminiPartsToClaude(parts) {
     else if (part.functionCall) {
       blocks.push({
         type: 'tool_use',
-        id: part.functionCall.id || `toolu_${generateRequestId()}`,
+        id: part.functionCall.id || generateToolUseId(),
         name: part.functionCall.name,
         input: part.functionCall.args || {}
       });

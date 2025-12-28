@@ -23,6 +23,10 @@ function generateToolCallId() {
   return `call_${randomUUID().replace(/-/g, '')}`;
 }
 
+function generateToolUseId() {
+  return `toolu_${randomUUID().replace(/-/g, '')}`;
+}
+
 function generateReasoningId() {
   return `rs_${randomUUID().replace(/-/g, '')}`;
 }
@@ -32,5 +36,6 @@ export {
   generateSessionId,
   generateRequestId,
   generateToolCallId,
+  generateToolUseId,
   generateReasoningId
 }
