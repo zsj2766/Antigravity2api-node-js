@@ -522,11 +522,17 @@ export class ClaudeToOpenaiSseEmitter {
           input: {}
         }
       });
-      writeSSE(this.res, 'content_block_delta', {
-        type: 'content_block_delta',
-        index,
-        delta: { type: 'input_json_delta', partial_json: inputJson }
-      });
+      // TASK-130: 增量发送 JSON 片段
+      const CHUNK_SIZE = 128;
+      for (let i = 0; i < inputJson.length; i += CHUNK_SIZE) {
+        const chunk = inputJson.slice(i, i + CHUNK_SIZE);
+        writeSSE(this.res, 'content_block_delta', {
+          type: 'content_block_delta',
+          index,
+          delta: { type: 'input_json_delta', partial_json: chunk }
+        });
+      }
+
       writeSSE(this.res, 'content_block_stop', { type: 'content_block_stop', index });
     });
   }
