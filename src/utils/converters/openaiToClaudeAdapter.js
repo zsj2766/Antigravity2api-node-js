@@ -14,13 +14,7 @@
  */
 
 import { generateRequestId } from '../idGenerator.js';
-
-// OpenAI reasoning effort 到 Claude thinking budget_tokens 的映射
-const REASONING_EFFORT_TO_BUDGET = {
-  low: 5000,
-  medium: 10000,
-  high: 20000
-};
+import { resolveThinkingBudget } from './common/index.js';
 
 import {
   normalizeMessagesForClaude,
@@ -359,8 +353,7 @@ export function mapOpenAIToClaude(body) {
 
   // 处理 reasoning effort -> thinking budget
   if (body.reasoning && typeof body.reasoning === 'object') {
-    const effort = body.reasoning.effort || 'medium';
-    const budgetTokens = REASONING_EFFORT_TO_BUDGET[effort] || 10000;
+    const budgetTokens = resolveThinkingBudget(body.reasoning.effort);
 
     result.thinking = {
       type: 'enabled',
