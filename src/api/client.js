@@ -4,10 +4,17 @@ import https from 'https';
 import tokenManager from '../auth/token_manager.js';
 import config from '../config/config.js';
 import { log } from '../utils/logger.js';
-import { generateRequestId, generateToolCallId } from '../utils/idGenerator.js';
+import { generateRequestId } from '../utils/idGenerator.js';
 import AntigravityRequester from '../AntigravityRequester.js';
+import { registerTextThoughtSignature } from '../utils/utils.js';
+import {
+  parseGeminiStreamToOpenAI,
+  toOpenAiUsage,
+  convertToToolCallWithSignature,
+  flushTextAccumulator,
+  mapGeminiStopReason
+} from '../utils/converters/index.js';
 import { saveBase64Image } from '../utils/imageStorage.js';
-import { registerTextThoughtSignature, registerThoughtSignature } from '../utils/utils.js';
 
 // HTTP Keep-Alive Agent 配置（复用 TCP 连接提升性能）
 const agentOptions = {
@@ -298,118 +305,11 @@ async function handleApiError(error, token) {
     throw err;
 }
 
-// 转换 functionCall 为 OpenAI 格式
-function convertToToolCall(functionCall) {
-    return {
-        id: functionCall.id || generateToolCallId(),
-        type: 'function',
-        function: {
-            name: functionCall.name,
-            arguments: JSON.stringify(functionCall.args)
-        }
-    };
-}
-
-
-// 辅助函数：在保留原有结构的同时记录 thoughtSignature
-function convertToToolCallWithSignature(functionCall, thoughtSignature) {
-    const toolCall = convertToToolCall(functionCall);
-    if (thoughtSignature && toolCall && toolCall.id) {
-        registerThoughtSignature(toolCall.id, thoughtSignature);
-    }
-    return toolCall;
-}
-
-// 解析并发送流式响应片段（会修改 state 并触发 callback）
-function toOpenAiUsage(usageMetadata) {
-    if (!usageMetadata) return null;
-
-    const prompt = usageMetadata.promptTokenCount ?? usageMetadata.inputTokenCount ?? null;
-    const completion = usageMetadata.candidatesTokenCount ?? usageMetadata.outputTokenCount ?? null;
-    const total =
-        usageMetadata.totalTokenCount ??
-        (Number.isFinite(prompt) && Number.isFinite(completion) ? prompt + completion : null);
-    const inferredCompletion =
-        completion ?? (Number.isFinite(total) && Number.isFinite(prompt) ? Math.max(total - prompt, 0) : total);
-
-    return {
-        prompt_tokens: prompt,
-        completion_tokens: inferredCompletion,
-        total_tokens:
-            total ?? (Number.isFinite(prompt) && Number.isFinite(inferredCompletion) ? prompt + inferredCompletion : null)
-    };
-}
-
-function flushTextAccumulator(state) {
-    if (!state?.textAccumulator) return;
-    const { text, signature } = state.textAccumulator;
-    if (text && signature) {
-        registerTextThoughtSignature(text, signature);
-    }
-    state.textAccumulator = { text: '', signature: null };
-}
-
-function parseAndEmitStreamChunk(line, state, callback) {
-    if (!line.startsWith('data: ')) return;
-
-    try {
-        const data = JSON.parse(line.slice(6));
-        const parts = data.response?.candidates?.[0]?.content?.parts;
-
-        if (data.response?.usageMetadata) {
-            state.usage = toOpenAiUsage(data.response.usageMetadata);
-        }
-
-        if (parts) {
-            for (const part of parts) {
-                if (part.thought === true) {
-                    // 思维链内容 - 直接发送
-                    if (part.text) {
-                        callback({ type: 'thinking', content: part.text });
-                    }
-                    // 思维阶段的中间图片，跳过（只发送最终图片）
-                } else if (part.text !== undefined) {
-                    if (part.thoughtSignature) {
-                        registerTextThoughtSignature(part.text, part.thoughtSignature);
-                        state.textAccumulator.signature = part.thoughtSignature;
-                    }
-                    state.textAccumulator.text += part.text || '';
-                    callback({ type: 'text', content: part.text });
-                } else if (part.functionCall) {
-                    // 工具调用
-                    state.toolCalls.push(convertToToolCallWithSignature(part.functionCall, part.thoughtSignature));
-                } else if (part.inlineData) {
-                    // 图片数据
-                    const imageUrl = saveBase64Image(part.inlineData.data, part.inlineData.mimeType);
-                    callback({
-                        type: 'image',
-                        url: imageUrl,
-                        mimeType: part.inlineData.mimeType,
-                        data: part.inlineData.data,
-                        thought: part.thought === true
-                    });
-                }
-            }
-        }
-
-        // 响应结束时发送工具调用
-        if (data.response?.candidates?.[0]?.finishReason) {
-            flushTextAccumulator(state);
-            if (state.toolCalls.length > 0) {
-                callback({ type: 'tool_calls', tool_calls: state.toolCalls });
-                state.toolCalls = [];
-            }
-        }
-    } catch (e) {
-        // 忽略 JSON 解析错误
-    }
-}
-
 // ==================== 导出函数 ====================
 
 export async function generateAssistantResponse(requestBody, token, callback) {
 
-    const state = { toolCalls: [], usage: null, textAccumulator: { text: '', signature: null } };
+    const state = { toolCalls: [], usage: null, textAccumulator: { text: '', signature: null }, finishReason: null };
     let buffer = ''; // 缓冲区：处理跨 chunk 的不完整行
     let streamChunks = []; // 收集流式响应（用于 debug=high 日志）
 
@@ -418,7 +318,14 @@ export async function generateAssistantResponse(requestBody, token, callback) {
         streamChunks.push(chunk); // 收集响应片段
         const lines = buffer.split('\n');
         buffer = lines.pop(); // 保留最后一行（可能不完整）
-        lines.forEach(line => parseAndEmitStreamChunk(line, state, callback));
+        lines.forEach(line => parseGeminiStreamToOpenAI(line, state, (data) => {
+            // 拦截 finish_reason 事件，存入 state 而非透传给上层
+            if (data.type === 'finish_reason') {
+                state.finishReason = data.finishReason;
+            } else {
+                callback(data);
+            }
+        }));
     };
 
     try {
@@ -518,7 +425,7 @@ export async function generateAssistantResponse(requestBody, token, callback) {
         await handleApiError(error, token);
     }
 
-    return { usage: state.usage };
+    return { usage: state.usage, finishReason: state.finishReason };
 }
 
 export async function getAvailableModels() {
@@ -671,7 +578,8 @@ export async function generateAssistantResponseNoStream(requestBody, token) {
     }
 
     // 解析响应内容
-    const parts = data.response?.candidates?.[0]?.content?.parts || [];
+    const candidate = data.response?.candidates?.[0];
+    const parts = candidate?.content?.parts || [];
     const usage = toOpenAiUsage(data.response?.usageMetadata);
     let content = '';
     let thinkingContent = '';
@@ -705,14 +613,19 @@ export async function generateAssistantResponseNoStream(requestBody, token) {
         registerTextThoughtSignature(aggregatedText, aggregatedTextSignature);
     }
 
+    // 计算 finishReason（使用统一映射）
+    const rawFinishReason = candidate?.finishReason;
+    const hasToolCalls = toolCalls.length > 0;
+    const finishReason = mapGeminiStopReason(rawFinishReason, hasToolCalls).openai;
+
     // 生图模型：转换为 markdown 格式，并返回独立的 thinking 字段
     if (imageUrls.length > 0) {
         let markdown = content ? content + '\n\n' : '';
         markdown += imageUrls.map(url => `![image](${url})`).join('\n\n');
-        return { content: markdown, toolCalls, thinking: thinkingContent || null };
+        return { content: markdown, toolCalls, thinking: thinkingContent || null, finishReason };
     }
 
-    return { content, toolCalls, usage };
+    return { content, toolCalls, usage, finishReason };
 }
 
 // 直接返回原始 Gemini 风格响应（用于 Gemini 兼容接口）

@@ -17,7 +17,7 @@ import {
   safeJsonParse,
   safeJsonStringify
 } from '../utils.js';
-import { convertClaudeImageToGemini, convertClaudeDocumentToGemini, extractMediaFromToolResult, cleanJsonSchema } from './common/index.js';
+import { convertClaudeImageToGemini, convertClaudeDocumentToGemini, extractMediaFromToolResult, cleanJsonSchema, mapGeminiStopReason } from './common/index.js';
 
 // ==================== 请求转换：Claude → Gemini ====================
 
@@ -633,7 +633,7 @@ class ClaudeSseEmitter {
     writeSSE(this.res, 'content_block_stop', { type: 'content_block_stop', index });
   }
 
-  finish(usage) {
+  finish(usage, stopReason = null) {
     if (this.finished) return;
     this.finished = true;
     this.closeTextBlock();
@@ -648,9 +648,12 @@ class ClaudeSseEmitter {
       usage?.input_tokens ??
       (this.inputTokens ?? null);
 
+    // 使用传入的 stopReason，默认为 'end_turn'
+    const finalStopReason = stopReason || 'end_turn';
+
     writeSSE(this.res, 'message_delta', {
       type: 'message_delta',
-      delta: { stop_reason: 'end_turn', stop_sequence: null },
+      delta: { stop_reason: finalStopReason, stop_sequence: null },
       usage: {
         input_tokens: inputTokens || 0,
         output_tokens: outputTokens || 0
@@ -785,16 +788,10 @@ function convertGeminiResponseToClaude(geminiResponse, requestId, model) {
   const parts = candidate?.content?.parts || [];
   const content = convertGeminiPartsToClaude(parts);
 
-  // 映射 finishReason
-  let stopReason = 'end_turn';
+  // 映射 finishReason（使用统一映射模块）
   const finishReason = candidate?.finishReason;
-  if (finishReason === 'MAX_TOKENS') {
-    stopReason = 'max_tokens';
-  } else if (finishReason === 'SAFETY') {
-    stopReason = 'content_filter';
-  } else if (content.some(b => b.type === 'tool_use')) {
-    stopReason = 'tool_use';
-  }
+  const hasToolUse = content.some(b => b.type === 'tool_use');
+  const stopReason = mapGeminiStopReason(finishReason, hasToolUse).claude;
 
   // 转换 usage
   const usageMetadata = geminiResponse?.usageMetadata;

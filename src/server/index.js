@@ -19,7 +19,9 @@ import {
   ClaudeSseEmitter,
   countClaudeTokens,
   buildClaudeContentBlocks,
-  estimateTokensFromText
+  estimateTokensFromText,
+  mapGeminiStopReason,
+  mapOpenAIFinishReasonToClaude
 } from '../utils/converters/index.js';
 import { saveBase64Image } from '../utils/imageStorage.js';
 import { generateProjectId } from '../utils/idGenerator.js';
@@ -1905,7 +1907,7 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
         responseSummaryForLog = summarizeStreamEvents(streamEventsForLog);
       } else {
         let hasToolCall = false;
-        const { usage } = await generateAssistantResponse(requestBody, token, data => {
+        const { usage, finishReason } = await generateAssistantResponse(requestBody, token, data => {
           if (!res.headersSent) setStreamHeaders(res);
           streamEventsForLog.push(data);
 
@@ -1946,19 +1948,22 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
           }
         });
         if (!res.headersSent) setStreamHeaders(res);
-        endStream(res, id, created, model, hasToolCall ? 'tool_calls' : 'stop', usage);
+        // 优先使用上游返回的 finishReason，回退逻辑保持兼容
+        const finalFinishReason = finishReason || (hasToolCall ? 'tool_calls' : 'stop');
+        endStream(res, id, created, model, finalFinishReason, usage);
         responseBodyForLog = { stream: true, events: streamEventsForLog, usage };
         responseSummaryForLog = summarizeStreamEvents(streamEventsForLog);
       }
     } else {
-      const { content, toolCalls, usage } = await generateAssistantResponseNoStream(
+      const { content, toolCalls, usage, finishReason } = await generateAssistantResponseNoStream(
         requestBody,
         token
       );
       const message = { role: 'assistant', content };
       if (toolCalls.length > 0) message.tool_calls = toolCalls;
 
-      const finishReason = toolCalls.length > 0 ? 'tool_calls' : 'stop';
+      // 优先使用上游返回的 finishReason
+      const finalFinishReason = finishReason || (toolCalls.length > 0 ? 'tool_calls' : 'stop');
 
       res.json({
         id,
@@ -1969,12 +1974,12 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
           {
             index: 0,
             message,
-            finish_reason: finishReason
+            finish_reason: finalFinishReason
           }
         ],
         usage: usage || null
       });
-      responseBodyForLog = { stream: false, choices: [{ message, finish_reason: finishReason }], usage };
+      responseBodyForLog = { stream: false, choices: [{ message, finish_reason: finalFinishReason }], usage };
       responseSummaryForLog = { text: content, tool_calls: toolCalls, usage };
     }
 
@@ -2687,7 +2692,8 @@ app.post('/v1/messages', async (req, res) => {
       });
       emitter.start();
 
-      const { usage } = await generateAssistantResponse(requestBody, token, async data => {
+      let hasToolCalls = false;
+      const { usage, finishReason } = await generateAssistantResponse(requestBody, token, async data => {
         if (data.type === 'thinking') {
           emitter.sendThinking(data.content);
         } else if (data.type === 'text') {
@@ -2695,12 +2701,18 @@ app.post('/v1/messages', async (req, res) => {
         } else if (data.type === 'image') {
           emitter.sendText(`![image](${data.url})`);
         } else if (data.type === 'tool_calls') {
+          hasToolCalls = true;
           await emitter.sendToolCalls(data.tool_calls);
         }
       });
 
+      // 使用上游返回的 finishReason (OpenAI 格式) 映射为 Claude stop_reason
+      const stopReason = finishReason
+        ? mapOpenAIFinishReasonToClaude(finishReason)
+        : (hasToolCalls ? 'tool_use' : 'end_turn');
+
       responseBodyForLog = { stream: true, usage };
-      emitter.finish(usage);
+      emitter.finish(usage, stopReason);
       writeLog({ success: true, status: res.statusCode || 200 });
     } else {
       const result = await generateAssistantResponseNoStream(requestBody, token);
@@ -2710,13 +2722,18 @@ app.post('/v1/messages', async (req, res) => {
         result.usage?.output_tokens ??
         (result.content ? estimateTokensFromText(result.content) : 0);
 
+      // 使用上游返回的 finishReason (OpenAI 格式) 映射为 Claude stop_reason
+      const stopReason = result.finishReason
+        ? mapOpenAIFinishReasonToClaude(result.finishReason)
+        : (result.toolCalls?.length ? 'tool_use' : 'end_turn');
+
       const payload = {
         id: `msg_${requestId}`,
         type: 'message',
         role: 'assistant',
         model: claudeBody.model,
         content: contentBlocks,
-        stop_reason: result.toolCalls?.length ? 'tool_use' : 'end_turn',
+        stop_reason: stopReason,
         stop_sequence: null,
         usage: {
           input_tokens: tokenStats?.input_tokens || 0,

@@ -9,7 +9,7 @@
 import config from '../../config/config.js';
 import { generateRequestId, isThinkingModel, generateGenerationConfig } from '../utils.js';
 import { generateToolCallId, generateReasoningId } from '../idGenerator.js';
-import { extractImagesFromContent, cleanJsonSchema } from './common/index.js';
+import { extractImagesFromContent, cleanJsonSchema, mapGeminiStopReason } from './common/index.js';
 import {
   getThoughtSignature,
   getTextThoughtSignature,
@@ -371,10 +371,17 @@ function parseGeminiStreamToOpenAI(line, state, callback) {
 
     if (data.response?.candidates?.[0]?.finishReason) {
       flushTextAccumulator(state);
-      if (state.toolCalls.length > 0) {
+      const finishReason = data.response.candidates[0].finishReason;
+      const hasToolCalls = state.toolCalls.length > 0;
+
+      if (hasToolCalls) {
         callback({ type: 'tool_calls', tool_calls: state.toolCalls });
         state.toolCalls = [];
       }
+
+      // 使用统一映射并发送 finish_reason 事件
+      const mapped = mapGeminiStopReason(finishReason, hasToolCalls).openai;
+      callback({ type: 'finish_reason', finishReason: mapped });
     }
   } catch (e) {
     // 忽略 JSON 解析错误

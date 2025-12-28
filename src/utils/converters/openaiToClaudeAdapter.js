@@ -14,7 +14,7 @@
  */
 
 import { generateRequestId, generateToolUseId } from '../idGenerator.js';
-import { resolveThinkingBudget } from './common/index.js';
+import { resolveThinkingBudget, mapClaudeToOpenAI } from './common/index.js';
 
 import {
   normalizeMessagesForClaude,
@@ -485,13 +485,8 @@ export function convertClaudeResponseToOpenAI(claudeResponse, requestId) {
     message.tool_calls = toolCalls;
   }
 
-  // 映射 stop_reason
-  let finishReason = 'stop';
-  if (claudeResponse.stop_reason === 'tool_use') {
-    finishReason = 'tool_calls';
-  } else if (claudeResponse.stop_reason === 'max_tokens') {
-    finishReason = 'length';
-  }
+  // 映射 stop_reason（使用统一映射模块）
+  const finishReason = mapClaudeToOpenAI(claudeResponse.stop_reason);
 
   return {
     id: `chatcmpl-${requestId || generateRequestId()}`,

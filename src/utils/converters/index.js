@@ -54,3 +54,11 @@ export {
   convertOpenAIToolCallsToClaude,
   convertOpenAIToolsToClaude
 } from './openaiToClaudeAdapter.js';
+
+// Common Utilities - Stop Reason Mapping
+export {
+  mapGeminiStopReason,
+  mapClaudeToOpenAI as mapClaudeStopReasonToOpenAI,
+  mapOpenAIToClaude as mapOpenAIFinishReasonToClaude,
+  STOP_REASON_MAP
+} from './common/index.js';

@@ -20,7 +20,8 @@ import { generateRequestId, generateToolCallId, generateToolUseId } from '../idG
 import {
   convertClaudeImageToOpenAI,
   extractMediaFromToolResult,
-  resolveReasoningEffort
+  resolveReasoningEffort,
+  mapOpenAIToClaude
 } from './common/index.js';
 import { safeJsonStringify, safeJsonParse } from '../utils.js';
 
@@ -544,7 +545,7 @@ export class ClaudeToOpenaiSseEmitter {
     writeSSE(this.res, 'content_block_stop', { type: 'content_block_stop', index });
   }
 
-  finish(usage) {
+  finish(usage, finishReason = null) {
     if (this.finished) return;
     this.finished = true;
     this.closeTextBlock();
@@ -559,9 +560,12 @@ export class ClaudeToOpenaiSseEmitter {
       usage?.input_tokens ??
       (this.inputTokens ?? null);
 
+    // 使用统一映射：如果传入了 OpenAI finishReason，则映射为 Claude stop_reason
+    const stopReason = finishReason ? mapOpenAIToClaude(finishReason) : 'end_turn';
+
     writeSSE(this.res, 'message_delta', {
       type: 'message_delta',
-      delta: { stop_reason: 'end_turn', stop_sequence: null },
+      delta: { stop_reason: stopReason, stop_sequence: null },
       usage: {
         input_tokens: inputTokens || 0,
         output_tokens: outputTokens || 0
