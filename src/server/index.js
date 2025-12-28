@@ -1912,8 +1912,18 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
           streamEventsForLog.push(data);
 
           let delta = {};
-          if (data.type === 'tool_calls') {
-            // 为兼容 OpenAI 流式规范，这里补充 index 字段
+          if (data.type === 'tool_call_chunk') {
+            // 实时处理工具调用增量
+            delta = {
+              tool_calls: [{
+                index: data.index,
+                id: data.tool_call.id,
+                type: 'function',
+                function: data.tool_call.function
+              }]
+            };
+          } else if (data.type === 'tool_calls') {
+            // 兼容旧逻辑（如果 adapter 仍发送汇总）
             delta = {
               tool_calls: (data.tool_calls || []).map((toolCall, index) => ({
                 index,
@@ -1943,7 +1953,7 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
 
           // 只有当 delta 有内容时才发送
           if (Object.keys(delta).length > 0) {
-            if (data.type === 'tool_calls') hasToolCall = true;
+            if (data.type === 'tool_calls' || data.type === 'tool_call_chunk') hasToolCall = true;
             writeStreamData(res, createStreamChunk(id, created, model, delta));
           }
         });
@@ -2703,6 +2713,10 @@ app.post('/v1/messages', async (req, res) => {
         } else if (data.type === 'tool_calls') {
           hasToolCalls = true;
           await emitter.sendToolCalls(data.tool_calls);
+        } else if (data.type === 'tool_call_chunk') {
+          hasToolCalls = true;
+          // Claude Emitter 支持发送数组，将单次增量包装为数组发送
+          await emitter.sendToolCalls([data.tool_call]);
         }
       });
 

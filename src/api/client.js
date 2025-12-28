@@ -309,7 +309,7 @@ async function handleApiError(error, token) {
 
 export async function generateAssistantResponse(requestBody, token, callback) {
 
-    const state = { toolCalls: [], usage: null, textAccumulator: { text: '', signature: null }, finishReason: null };
+    const state = { toolCalls: [], toolCallIndex: 0, usage: null, textAccumulator: { text: '', signature: null }, finishReason: null };
     let buffer = ''; // 缓冲区：处理跨 chunk 的不完整行
     let streamChunks = []; // 收集流式响应（用于 debug=high 日志）
 

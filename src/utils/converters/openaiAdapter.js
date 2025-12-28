@@ -366,7 +366,16 @@ function parseGeminiStreamToOpenAI(line, state, callback) {
           state.textAccumulator.text += part.text || '';
           callback({ type: 'text', content: part.text });
         } else if (part.functionCall) {
-          state.toolCalls.push(convertToToolCallWithSignature(part.functionCall, part.thoughtSignature));
+          const toolCall = convertToToolCallWithSignature(part.functionCall, part.thoughtSignature);
+          state.toolCalls.push(toolCall);
+
+          // 实时发送工具调用增量
+          callback({
+            type: 'tool_call_chunk',
+            index: state.toolCallIndex || 0,
+            tool_call: toolCall
+          });
+          state.toolCallIndex = (state.toolCallIndex || 0) + 1;
         } else if (part.inlineData) {
           const imageUrl = saveBase64Image(part.inlineData.data, part.inlineData.mimeType);
           callback({
@@ -385,8 +394,8 @@ function parseGeminiStreamToOpenAI(line, state, callback) {
       const finishReason = data.response.candidates[0].finishReason;
       const hasToolCalls = state.toolCalls.length > 0;
 
+      // 工具调用已通过 tool_call_chunk 实时发送，此处不再发送汇总 tool_calls 事件
       if (hasToolCalls) {
-        callback({ type: 'tool_calls', tool_calls: state.toolCalls });
         state.toolCalls = [];
       }
 
