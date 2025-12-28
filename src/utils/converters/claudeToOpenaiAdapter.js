@@ -42,7 +42,7 @@ const THINKING_END_TAG = '</thinking>';
  * @param {Array} blocks - Claude 内容块数组
  * @returns {Array} - OpenAI tool_calls 数组
  */
-function extractToolUsesAsOpenAIToolCalls(blocks) {
+export function extractToolUsesAsOpenAIToolCalls(blocks) {
   if (!Array.isArray(blocks)) return [];
 
   return blocks
@@ -52,7 +52,7 @@ function extractToolUsesAsOpenAIToolCalls(blocks) {
       type: 'function',
       function: {
         name: b.name || 'unknown',
-        arguments: safeJsonStringify(b.input, '{}')
+        arguments: safeJsonStringify(b.input) || '{}'
       }
     }));
 }
@@ -62,7 +62,7 @@ function extractToolUsesAsOpenAIToolCalls(blocks) {
  * 支持多模态内容（文本+图片）
  * 注意：tool_use 不再转为 XML，而是单独提取为 tool_calls
  */
-function convertClaudeContentToOpenAI(content) {
+export function convertClaudeContentToOpenAI(content) {
   // 字符串内容直接返回
   if (typeof content === 'string') {
     return { content: content, toolCalls: [] };
