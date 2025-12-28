@@ -211,13 +211,27 @@ function convertOpenAIToolCallsToClaude(toolCalls) {
 
 /**
  * 将 OpenAI tool 消息转换为 Claude tool_result 块
+ * 支持多模态内容（文本、图片、文档）
  * @param {object} message - OpenAI tool 消息
  * @returns {object} - Claude tool_result 块
  */
 function convertOpenAIToolResultToClaude(message) {
-  const content = message.content || '';
-  // 检测 Error: 前缀 (不区分大小写)
-  const isError = /^error:\s*/i.test(content);
+  const rawContent = message.content;
+  let isError = false;
+
+  // 1. 错误检测
+  if (typeof rawContent === 'string') {
+    isError = /^error:\s*/i.test(rawContent);
+  } else if (Array.isArray(rawContent) && rawContent.length > 0) {
+    // 在多模态内容中查找第一个文本块检测错误
+    const firstText = rawContent.find(b => b.type === 'text');
+    if (firstText && typeof firstText.text === 'string') {
+      isError = /^error:\s*/i.test(firstText.text);
+    }
+  }
+
+  // 2. 转换内容 (支持文本、图片、文档等)
+  const content = convertOpenAIContentToClaude(rawContent);
 
   const result = {
     type: 'tool_result',
@@ -225,7 +239,7 @@ function convertOpenAIToolResultToClaude(message) {
     content: content
   };
 
-  // 仅在检测到错误时添加 is_error 字段
+  // 3. 添加错误标记
   if (isError) {
     result.is_error = true;
   }
