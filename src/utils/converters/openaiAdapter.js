@@ -288,6 +288,7 @@ function convertToToolCallWithSignature(functionCall, thoughtSignature) {
 
 /**
  * 将 Gemini usageMetadata 转换为 OpenAI usage 格式
+ * 支持字段：promptTokenCount/inputTokenCount, candidatesTokenCount/outputTokenCount, cachedContentTokenCount
  */
 function toOpenAiUsage(usageMetadata) {
   if (!usageMetadata) return null;
@@ -300,12 +301,22 @@ function toOpenAiUsage(usageMetadata) {
   const inferredCompletion =
     completion ?? (Number.isFinite(total) && Number.isFinite(prompt) ? Math.max(total - prompt, 0) : total);
 
-  return {
+  const usage = {
     prompt_tokens: prompt,
     completion_tokens: inferredCompletion,
     total_tokens:
       total ?? (Number.isFinite(prompt) && Number.isFinite(inferredCompletion) ? prompt + inferredCompletion : null)
   };
+
+  // 添加缓存统计字段 (仅当 cachedContentTokenCount > 0 时添加，保持 Payload 最小化)
+  const cachedTokens = usageMetadata.cachedContentTokenCount;
+  if (cachedTokens > 0) {
+    usage.prompt_tokens_details = {
+      cached_tokens: cachedTokens
+    };
+  }
+
+  return usage;
 }
 
 /**

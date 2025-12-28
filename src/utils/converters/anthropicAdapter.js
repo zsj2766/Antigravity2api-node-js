@@ -648,6 +648,13 @@ class ClaudeSseEmitter {
       usage?.input_tokens ??
       (this.inputTokens ?? null);
 
+    // 提取缓存统计字段
+    const cacheCreationTokens = usage?.cache_creation_input_tokens ?? 0;
+    const cacheReadTokens =
+      usage?.cache_read_input_tokens ??
+      usage?.prompt_tokens_details?.cached_tokens ??
+      0;
+
     // 使用传入的 stopReason，默认为 'end_turn'
     const finalStopReason = stopReason || 'end_turn';
 
@@ -656,7 +663,9 @@ class ClaudeSseEmitter {
       delta: { stop_reason: finalStopReason, stop_sequence: null },
       usage: {
         input_tokens: inputTokens || 0,
-        output_tokens: outputTokens || 0
+        output_tokens: outputTokens || 0,
+        cache_creation_input_tokens: cacheCreationTokens,
+        cache_read_input_tokens: cacheReadTokens
       }
     });
     writeSSE(this.res, 'message_stop', { type: 'message_stop' });
@@ -793,11 +802,13 @@ function convertGeminiResponseToClaude(geminiResponse, requestId, model) {
   const hasToolUse = content.some(b => b.type === 'tool_use');
   const stopReason = mapGeminiStopReason(finishReason, hasToolUse).claude;
 
-  // 转换 usage
+  // 转换 usage (包含缓存统计字段)
   const usageMetadata = geminiResponse?.usageMetadata;
   const usage = {
-    input_tokens: usageMetadata?.promptTokenCount || usageMetadata?.inputTokenCount || 0,
-    output_tokens: usageMetadata?.candidatesTokenCount || usageMetadata?.outputTokenCount || 0
+    input_tokens: usageMetadata?.promptTokenCount ?? usageMetadata?.inputTokenCount ?? 0,
+    output_tokens: usageMetadata?.candidatesTokenCount ?? usageMetadata?.outputTokenCount ?? 0,
+    cache_creation_input_tokens: 0, // Gemini 无对应字段，Context Caching 通过显式 API 创建
+    cache_read_input_tokens: usageMetadata?.cachedContentTokenCount ?? 0
   };
 
   return {
