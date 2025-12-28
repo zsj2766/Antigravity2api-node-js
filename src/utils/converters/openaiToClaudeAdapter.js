@@ -72,34 +72,47 @@ function convertOpenAIImageToClaude(imageUrl) {
  * @returns {object|null} - Claude document block 或 null
  */
 function convertOpenAIFileToClaude(filePart) {
+  let source = null;
+
   // 1. filename + file_data (Data URL)
   if (filePart.file_data) {
     const base64Match = filePart.file_data.match(/^data:([^;]+);base64,(.+)$/);
     if (base64Match) {
-      return {
-        type: 'document',
-        source: {
-          type: 'base64',
-          media_type: base64Match[1],
-          data: base64Match[2]
-        },
-        title: filePart.filename
+      source = {
+        type: 'base64',
+        media_type: base64Match[1],
+        data: base64Match[2]
       };
     }
   }
-
   // 2. file_id 引用
-  if (filePart.file_id) {
-    return {
-      type: 'document',
-      source: {
-        type: 'file',
-        file_id: filePart.file_id
-      }
+  else if (filePart.file_id) {
+    source = {
+      type: 'file',
+      file_id: filePart.file_id
     };
   }
 
-  return null;
+  if (!source) return null;
+
+  // 3. 组装 Document Block
+  const documentBlock = {
+    type: 'document',
+    source
+  };
+
+  // 映射 filename/title -> title (优先使用 explicit title)
+  const docTitle = filePart.title || filePart.filename;
+  if (docTitle) {
+    documentBlock.title = docTitle;
+  }
+
+  // 透传 context (如果有)
+  if (filePart.context) {
+    documentBlock.context = filePart.context;
+  }
+
+  return documentBlock;
 }
 
 /**
