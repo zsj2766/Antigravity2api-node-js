@@ -14,6 +14,14 @@
  */
 
 import { generateRequestId } from '../idGenerator.js';
+
+// OpenAI reasoning effort 到 Claude thinking budget_tokens 的映射
+const REASONING_EFFORT_TO_BUDGET = {
+  low: 5000,
+  medium: 10000,
+  high: 20000
+};
+
 import {
   normalizeMessagesForClaude,
   findFunctionNameByToolCallId
@@ -148,6 +156,25 @@ function convertOpenAIContentToClaude(content) {
         const fileBlock = convertOpenAIFileToClaude(part);
         if (fileBlock) {
           blocks.push(fileBlock);
+        }
+        break;
+
+      case 'reasoning':
+        // OpenAI Responses API reasoning 格式转换为 Claude thinking
+        const thinkingText = Array.isArray(part.summary)
+          ? part.summary.map(s => s.text || '').join('')
+          : '';
+
+        if (thinkingText) {
+          const thinkingBlock = {
+            type: 'thinking',
+            thinking: thinkingText
+          };
+          // 如果有 signature 则透传
+          if (part.signature) {
+            thinkingBlock.signature = part.signature;
+          }
+          blocks.push(thinkingBlock);
         }
         break;
     }
@@ -315,6 +342,22 @@ export function mapOpenAIToClaude(body) {
   }
   if (body.top_p !== undefined) {
     result.top_p = body.top_p;
+  }
+
+  // 处理 reasoning effort -> thinking budget
+  if (body.reasoning && typeof body.reasoning === 'object') {
+    const effort = body.reasoning.effort || 'medium';
+    const budgetTokens = REASONING_EFFORT_TO_BUDGET[effort] || 10000;
+
+    result.thinking = {
+      type: 'enabled',
+      budget_tokens: budgetTokens
+    };
+
+    // 确保 max_tokens 大于 budget_tokens (Claude API 硬性要求)
+    if (result.max_tokens <= budgetTokens) {
+      result.max_tokens = budgetTokens + 4096;
+    }
   }
 
   return result;
