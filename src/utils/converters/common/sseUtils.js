@@ -7,19 +7,9 @@
 
 import { safeJsonParse } from '../../utils.js';
 import { generateToolUseId } from '../../idGenerator.js';
+import { estimateTokensFromText } from './tokenUtils.js';
 
 // ==================== Token 估算 ====================
-
-/**
- * 估算文本 token 数量
- * @param {string|object} text - 文本或对象
- * @returns {number} - 估算的 token 数量
- */
-export function estimateTokensFromText(text) {
-  if (!text) return 0;
-  const normalized = typeof text === 'string' ? text : JSON.stringify(text);
-  return Math.max(1, Math.ceil(normalized.length / 4));
-}
 
 /**
  * 从 Claude 消息中提取文本内容
