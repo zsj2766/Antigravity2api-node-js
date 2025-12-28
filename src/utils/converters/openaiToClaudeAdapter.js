@@ -518,8 +518,28 @@ export class OpenAISseEmitter {
     this.requestId = requestId || generateRequestId();
     this.model = model || 'claude-proxy';
     this.finished = false;
+    this.hasStarted = false;
     this.toolCallIndex = 0;
     this.currentToolCallId = null;
+  }
+
+  /**
+   * 发送首个 chunk (包含 role: assistant)
+   */
+  start() {
+    if (this.hasStarted) return;
+    this.hasStarted = true;
+    this.writeSSE({
+      id: `chatcmpl-${this.requestId}`,
+      object: 'chat.completion.chunk',
+      created: Math.floor(Date.now() / 1000),
+      model: this.model,
+      choices: [{
+        index: 0,
+        delta: { role: 'assistant', content: '' },
+        finish_reason: null
+      }]
+    });
   }
 
   writeSSE(data) {
@@ -531,6 +551,9 @@ export class OpenAISseEmitter {
    */
   sendTextDelta(text) {
     if (!text || this.finished) return;
+
+    // 容错机制：自动补发首个 chunk
+    if (!this.hasStarted) this.start();
 
     this.writeSSE({
       id: `chatcmpl-${this.requestId}`,

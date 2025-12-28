@@ -1879,8 +1879,16 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
       if (isImageModel) {
         // 图像模型使用流式API，实现思维链实时传输
         const imageUrls = [];
+        let hasStarted = false;
         const { usage } = await generateAssistantResponse(requestBody, token, data => {
           if (!res.headersSent) setStreamHeaders(res);
+
+          // 确保首个 chunk 包含 role: assistant (OpenAI SSE 规范)
+          if (!hasStarted) {
+            hasStarted = true;
+            writeStreamData(res, createStreamChunk(id, created, model, { role: 'assistant', content: '' }));
+          }
+
           streamEventsForLog.push(data);
 
           if (data.type === 'thinking') {
@@ -1907,8 +1915,16 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
         responseSummaryForLog = summarizeStreamEvents(streamEventsForLog);
       } else {
         let hasToolCall = false;
+        let hasStarted = false;
         const { usage, finishReason } = await generateAssistantResponse(requestBody, token, data => {
           if (!res.headersSent) setStreamHeaders(res);
+
+          // 确保首个 chunk 包含 role: assistant (OpenAI SSE 规范)
+          if (!hasStarted) {
+            hasStarted = true;
+            writeStreamData(res, createStreamChunk(id, created, model, { role: 'assistant', content: '' }));
+          }
+
           streamEventsForLog.push(data);
 
           let delta = {};
@@ -2109,6 +2125,8 @@ const createChatCompletionHandler = (resolveToken, options = {}) => async (req, 
 
         if (stream) {
           setStreamHeaders(res);
+          // 确保首个 chunk 包含 role: assistant (OpenAI SSE 规范)
+          writeStreamData(res, createStreamChunk(id, created, model || 'unknown', { role: 'assistant', content: '' }));
           writeStreamData(
             res,
             createStreamChunk(id, created, model || 'unknown', { content: errorContent })

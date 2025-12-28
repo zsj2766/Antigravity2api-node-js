@@ -537,14 +537,19 @@ class ClaudeSseEmitter {
     this.textBlockIndex = null;
     this.thinkingBlockIndex = null;
     this.finished = false;
+    this.hasStarted = false;
     this.totalOutputTokens = 0;
   }
 
   start() {
+    if (this.hasStarted) return;
+    this.hasStarted = true;
     writeSSE(this.res, 'message_start', buildMessageStartPayload(this.requestId, this.model, this.inputTokens));
   }
 
   ensureTextBlock() {
+    // 容错机制：自动补发 message_start
+    if (!this.hasStarted) this.start();
     if (this.textBlockIndex !== null) return;
     this.textBlockIndex = this.nextIndex++;
     writeSSE(this.res, 'content_block_start', {
@@ -555,6 +560,8 @@ class ClaudeSseEmitter {
   }
 
   ensureThinkingBlock() {
+    // 容错机制：自动补发 message_start
+    if (!this.hasStarted) this.start();
     if (this.thinkingBlockIndex !== null) return;
     this.thinkingBlockIndex = this.nextIndex++;
     writeSSE(this.res, 'content_block_start', {
