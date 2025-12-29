@@ -3,7 +3,7 @@
  *
  * 职责：
  * 1. 请求转换：Claude Messages API → OpenAI Chat Completions API
- * 2. 响应转换：OpenAI 响应 → Claude 格式（含 SSE 流式）
+ * 2. 响应转换：Claude 流式响应 → OpenAI SSE 格式
  * 3. 工具调用格式转换
  *
  * 支持的 Claude 内容类型：
@@ -16,11 +16,11 @@
  * - redacted_thinking: 隐藏的思考内容
  */
 
-import { generateRequestId, generateToolCallId, generateToolUseId } from '../idGenerator.js';
+import { generateRequestId, generateToolCallId } from '../idGenerator.js';
 import { convertClaudeImageToOpenAI, extractMediaFromToolResult } from './imageUtils.js';
 import { resolveReasoningEffort } from './thinkingConfig.js';
-import { mapOpenAIToClaude } from './openaiToClaudeAdapter.js';
-import { writeSSE, buildMessageStartPayload, convertToolCallsToClaudeBlocks, buildClaudeContentBlocks, countClaudeTokens } from './sseUtils.js';
+import { mapClaudeStopToOpenAI } from './stopReasonMapper.js';
+import { convertToolCallsToClaudeBlocks, buildClaudeContentBlocks, countClaudeTokens } from './sseUtils.js';
 import { estimateTokensFromText } from './tokenUtils.js';
 import { safeJsonStringify, safeJsonParse } from '../utils.js';
 
@@ -335,159 +335,235 @@ export function mapClaudeToolsToOpenAITools(tools = []) {
   }));
 }
 
-// ==================== 响应转换：OpenAI → Claude ====================
+// ==================== 响应转换：Claude → OpenAI（非流式）====================
 
 // 从 common/sseUtils.js 再导出以保持 API 兼容性
 export { convertToolCallsToClaudeBlocks, estimateTokensFromText, countClaudeTokens, buildClaudeContentBlocks };
 
 /**
- * Claude SSE 响应发射器类
- * 用于将 OpenAI 流式响应转换为 Claude SSE 格式
+ * 将 Claude tool_use 块转换为 OpenAI tool_calls
+ * @param {Array} blocks - Claude 内容块数组
+ * @returns {Array} - OpenAI tool_calls 数组
  */
-export class ClaudeToOpenaiSseEmitter {
-  constructor(res, requestId, { model, inputTokens } = {}) {
+function convertClaudeToolUsesToOpenAI(blocks) {
+  if (!Array.isArray(blocks)) return [];
+
+  return blocks
+    .filter(b => b.type === 'tool_use')
+    .map(b => ({
+      id: b.id,
+      type: 'function',
+      function: {
+        name: b.name,
+        arguments: safeJsonStringify(b.input, '{}')
+      }
+    }));
+}
+
+/**
+ * 从 Claude 内容块中提取文本
+ * @param {Array} blocks - Claude 内容块数组
+ * @returns {string} - 合并后的文本
+ */
+function extractTextFromClaudeBlocks(blocks) {
+  if (!Array.isArray(blocks)) return '';
+
+  return blocks
+    .filter(b => b.type === 'text')
+    .map(b => b.text || '')
+    .join('');
+}
+
+/**
+ * 将 Claude 非流式响应转换为 OpenAI 格式
+ * @param {object} claudeResponse - Claude 响应
+ * @param {string} requestId - 请求 ID
+ * @returns {object} - OpenAI 格式响应
+ */
+export function convertClaudeResponseToOpenAI(claudeResponse, requestId) {
+  const content = claudeResponse.content || [];
+  const text = extractTextFromClaudeBlocks(content);
+  const toolCalls = convertClaudeToolUsesToOpenAI(content);
+
+  const message = {
+    role: 'assistant',
+    content: text || null
+  };
+
+  if (toolCalls.length > 0) {
+    message.tool_calls = toolCalls;
+  }
+
+  // 映射 stop_reason（使用统一映射模块）
+  const finishReason = mapClaudeStopToOpenAI(claudeResponse.stop_reason);
+
+  return {
+    id: `chatcmpl-${requestId || generateRequestId()}`,
+    object: 'chat.completion',
+    created: Math.floor(Date.now() / 1000),
+    model: claudeResponse.model || 'claude-proxy',
+    choices: [{
+      index: 0,
+      message,
+      finish_reason: finishReason
+    }],
+    usage: {
+      prompt_tokens: claudeResponse.usage?.input_tokens || 0,
+      completion_tokens: claudeResponse.usage?.output_tokens || 0,
+      total_tokens: (claudeResponse.usage?.input_tokens || 0) + (claudeResponse.usage?.output_tokens || 0)
+    }
+  };
+}
+
+// ==================== SSE 流式响应转换 ====================
+
+/**
+ * Claude → OpenAI SSE 响应发射器类
+ * 用于将 Claude 流式响应转换为 OpenAI SSE 格式
+ */
+export class ClaudeToOpenAISseEmitter {
+  constructor(res, requestId, { model } = {}) {
     this.res = res;
     this.requestId = requestId || generateRequestId();
     this.model = model || 'claude-proxy';
-    this.inputTokens = inputTokens || 0;
-    this.nextIndex = 0;
-    this.textBlockIndex = null;
-    this.thinkingBlockIndex = null;
     this.finished = false;
     this.hasStarted = false;
-    this.totalOutputTokens = 0;
+    this.toolCallIndex = 0;
+    this.currentToolCallId = null;
   }
 
+  /**
+   * 发送首个 chunk (包含 role: assistant)
+   */
   start() {
     if (this.hasStarted) return;
     this.hasStarted = true;
-    writeSSE(this.res, 'message_start', buildMessageStartPayload(this.requestId, this.model, this.inputTokens));
+    this.writeSSE({
+      id: `chatcmpl-${this.requestId}`,
+      object: 'chat.completion.chunk',
+      created: Math.floor(Date.now() / 1000),
+      model: this.model,
+      choices: [{
+        index: 0,
+        delta: { role: 'assistant', content: '' },
+        finish_reason: null
+      }]
+    });
   }
 
-  ensureTextBlock() {
-    // 容错机制：自动补发 message_start
+  writeSSE(data) {
+    this.res.write(`data: ${JSON.stringify(data)}\n\n`);
+  }
+
+  /**
+   * 发送文本增量
+   */
+  sendTextDelta(text) {
+    if (!text || this.finished) return;
+
+    // 容错机制：自动补发首个 chunk
     if (!this.hasStarted) this.start();
-    if (this.textBlockIndex !== null) return;
-    this.textBlockIndex = this.nextIndex++;
-    writeSSE(this.res, 'content_block_start', {
-      type: 'content_block_start',
-      index: this.textBlockIndex,
-      content_block: { type: 'text', text: '' }
+
+    this.writeSSE({
+      id: `chatcmpl-${this.requestId}`,
+      object: 'chat.completion.chunk',
+      created: Math.floor(Date.now() / 1000),
+      model: this.model,
+      choices: [{
+        index: 0,
+        delta: { content: text },
+        finish_reason: null
+      }]
     });
   }
 
-  ensureThinkingBlock() {
-    // 容错机制：自动补发 message_start
-    if (!this.hasStarted) this.start();
-    if (this.thinkingBlockIndex !== null) return;
-    this.thinkingBlockIndex = this.nextIndex++;
-    writeSSE(this.res, 'content_block_start', {
-      type: 'content_block_start',
-      index: this.thinkingBlockIndex,
-      content_block: { type: 'thinking', thinking: '' }
+  /**
+   * 发送工具调用开始
+   */
+  sendToolCallStart(id, name) {
+    if (this.finished) return;
+
+    this.currentToolCallId = id;
+    this.writeSSE({
+      id: `chatcmpl-${this.requestId}`,
+      object: 'chat.completion.chunk',
+      created: Math.floor(Date.now() / 1000),
+      model: this.model,
+      choices: [{
+        index: 0,
+        delta: {
+          tool_calls: [{
+            index: this.toolCallIndex,
+            id: id,
+            type: 'function',
+            function: { name: name, arguments: '' }
+          }]
+        },
+        finish_reason: null
+      }]
     });
   }
 
-  sendText(text) {
-    if (!text) return;
-    this.closeThinkingBlock();
-    this.ensureTextBlock();
-    this.totalOutputTokens += estimateTokensFromText(text);
-    writeSSE(this.res, 'content_block_delta', {
-      type: 'content_block_delta',
-      index: this.textBlockIndex,
-      delta: { type: 'text_delta', text }
+  /**
+   * 发送工具调用参数增量
+   */
+  sendToolCallArgumentsDelta(args) {
+    if (this.finished) return;
+
+    const argsStr = typeof args === 'string' ? args : JSON.stringify(args);
+    this.writeSSE({
+      id: `chatcmpl-${this.requestId}`,
+      object: 'chat.completion.chunk',
+      created: Math.floor(Date.now() / 1000),
+      model: this.model,
+      choices: [{
+        index: 0,
+        delta: {
+          tool_calls: [{
+            index: this.toolCallIndex,
+            function: { arguments: argsStr }
+          }]
+        },
+        finish_reason: null
+      }]
     });
   }
 
-  sendThinking(thinking) {
-    if (!thinking) return;
-    this.closeTextBlock();
-    this.ensureThinkingBlock();
-    this.totalOutputTokens += estimateTokensFromText(thinking);
-    writeSSE(this.res, 'content_block_delta', {
-      type: 'content_block_delta',
-      index: this.thinkingBlockIndex,
-      delta: { type: 'thinking_delta', thinking }
-    });
+  /**
+   * 完成当前工具调用，准备下一个
+   */
+  finishToolCall() {
+    this.toolCallIndex++;
+    this.currentToolCallId = null;
   }
 
-  async sendToolCalls(toolCalls = []) {
-    if (!toolCalls || toolCalls.length === 0) return;
-    await this.closeTextBlock();
-    await this.closeThinkingBlock();
-
-    toolCalls.forEach(call => {
-      const index = this.nextIndex++;
-      const args = call?.function?.arguments ?? '{}';
-      const inputJson = typeof args === 'string' ? args : JSON.stringify(args);
-      this.totalOutputTokens += estimateTokensFromText(inputJson);
-      writeSSE(this.res, 'content_block_start', {
-        type: 'content_block_start',
-        index,
-        content_block: {
-          type: 'tool_use',
-          id: call.id || generateToolUseId(),
-          name: call?.function?.name || 'tool',
-          input: {}
-        }
-      });
-      // TASK-130: 增量发送 JSON 片段
-      const CHUNK_SIZE = 128;
-      for (let i = 0; i < inputJson.length; i += CHUNK_SIZE) {
-        const chunk = inputJson.slice(i, i + CHUNK_SIZE);
-        writeSSE(this.res, 'content_block_delta', {
-          type: 'content_block_delta',
-          index,
-          delta: { type: 'input_json_delta', partial_json: chunk }
-        });
-      }
-
-      writeSSE(this.res, 'content_block_stop', { type: 'content_block_stop', index });
-    });
-  }
-
-  async closeTextBlock() {
-    if (this.textBlockIndex === null) return;
-    const index = this.textBlockIndex;
-    this.textBlockIndex = null;
-    writeSSE(this.res, 'content_block_stop', { type: 'content_block_stop', index });
-  }
-
-  async closeThinkingBlock() {
-    if (this.thinkingBlockIndex === null) return;
-    const index = this.thinkingBlockIndex;
-    this.thinkingBlockIndex = null;
-    writeSSE(this.res, 'content_block_stop', { type: 'content_block_stop', index });
-  }
-
-  finish(usage, finishReason = null) {
+  /**
+   * 完成响应
+   */
+  finish(finishReason = 'stop', usage = null) {
     if (this.finished) return;
     this.finished = true;
-    this.closeTextBlock();
-    this.closeThinkingBlock();
 
-    const outputTokens =
-      usage?.completion_tokens ??
-      usage?.output_tokens ??
-      (this.totalOutputTokens ?? 0);
-    const inputTokens =
-      usage?.prompt_tokens ??
-      usage?.input_tokens ??
-      (this.inputTokens ?? null);
-
-    // 使用统一映射：如果传入了 OpenAI finishReason，则映射为 Claude stop_reason
-    const stopReason = finishReason ? mapOpenAIToClaude(finishReason) : 'end_turn';
-
-    writeSSE(this.res, 'message_delta', {
-      type: 'message_delta',
-      delta: { stop_reason: stopReason, stop_sequence: null },
-      usage: {
-        input_tokens: inputTokens || 0,
-        output_tokens: outputTokens || 0
-      }
+    // 发送最终 chunk
+    this.writeSSE({
+      id: `chatcmpl-${this.requestId}`,
+      object: 'chat.completion.chunk',
+      created: Math.floor(Date.now() / 1000),
+      model: this.model,
+      choices: [{
+        index: 0,
+        delta: {},
+        finish_reason: finishReason
+      }],
+      usage: usage ? {
+        prompt_tokens: usage.input_tokens || usage.prompt_tokens || 0,
+        completion_tokens: usage.output_tokens || usage.completion_tokens || 0,
+        total_tokens: (usage.input_tokens || usage.prompt_tokens || 0) + (usage.output_tokens || usage.completion_tokens || 0)
+      } : undefined
     });
-    writeSSE(this.res, 'message_stop', { type: 'message_stop' });
+
+    // 发送 [DONE]
+    this.res.write('data: [DONE]\n\n');
     this.res.end();
   }
 }

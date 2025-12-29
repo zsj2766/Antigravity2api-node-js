@@ -4,8 +4,8 @@
  * 提供四个适配器：
  * - openaiAdapter: OpenAI ↔ Gemini（请求+响应）
  * - anthropicAdapter: Claude ↔ Gemini（请求+响应+SSE）
- * - claudeToOpenaiAdapter: Claude → OpenAI（请求转换+响应转换）
- * - openaiToClaudeAdapter: OpenAI → Claude（请求转换+响应转换）
+ * - claudeToOpenaiAdapter: Claude → OpenAI（请求转换 + 响应转换）
+ * - openaiToClaudeAdapter: OpenAI → Claude（请求转换 + 响应转换）
  */
 
 // OpenAI Adapter (OpenAI ↔ Gemini)
@@ -35,28 +35,28 @@ export {
   convertGeminiResponseToClaude
 } from './anthropicAdapter.js';
 
-// Claude → OpenAI Adapter
+// Claude → OpenAI Adapter（请求：Claude→OpenAI，响应：Claude→OpenAI SSE）
 export {
   mapClaudeToOpenAI,
   mapClaudeToolsToOpenAITools,
-  ClaudeToOpenaiSseEmitter
+  convertClaudeResponseToOpenAI,
+  ClaudeToOpenAISseEmitter
 } from './claudeToOpenaiAdapter.js';
 
-// OpenAI → Claude Adapter (新增)
+// OpenAI → Claude Adapter（请求：OpenAI→Claude，响应：OpenAI→Claude SSE）
 export {
   mapOpenAIToClaude,
-  convertClaudeResponseToOpenAI,
-  OpenAISseEmitter,
   convertOpenAIImageToClaude,
   convertOpenAIContentToClaude,
   convertOpenAIToolCallsToClaude,
-  convertOpenAIToolsToClaude
+  convertOpenAIToolsToClaude,
+  OpenAIToClaudeSseEmitter
 } from './openaiToClaudeAdapter.js';
 
 // Common Utilities - Stop Reason Mapping
 export {
   mapGeminiStopReason,
-  mapClaudeToOpenAI as mapClaudeStopReasonToOpenAI,
-  mapOpenAIToClaude as mapOpenAIFinishReasonToClaude,
+  mapClaudeStopToOpenAI,
+  mapOpenAIFinishToClaude,
   STOP_REASON_MAP
 } from './stopReasonMapper.js';

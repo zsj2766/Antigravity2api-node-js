@@ -83,7 +83,7 @@ export function mapGeminiStopReason(finishReason, hasToolCalls) {
  * @param {string} stopReason - Claude stop_reason
  * @returns {string} - OpenAI finish_reason，未知值降级为 'stop'
  */
-export function mapClaudeToOpenAI(stopReason) {
+export function mapClaudeStopToOpenAI(stopReason) {
   return STOP_REASON_MAP.CLAUDE[stopReason] || 'stop';
 }
 
@@ -93,6 +93,6 @@ export function mapClaudeToOpenAI(stopReason) {
  * @param {string} finishReason - OpenAI finish_reason
  * @returns {string} - Claude stop_reason，未知值降级为 'end_turn'
  */
-export function mapOpenAIToClaude(finishReason) {
+export function mapOpenAIFinishToClaude(finishReason) {
   return STOP_REASON_MAP.OPENAI[finishReason] || 'end_turn';
 }

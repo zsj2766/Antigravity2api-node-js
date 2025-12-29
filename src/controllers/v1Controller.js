@@ -25,7 +25,7 @@ import {
   countClaudeTokens,
   buildClaudeContentBlocks,
   estimateTokensFromText,
-  mapOpenAIFinishReasonToClaude
+  mapOpenAIFinishToClaude
 } from '../utils/converters/index.js';
 import {
   createRequestSnapshot,
@@ -657,7 +657,7 @@ export async function handleClaudeMessages(req, res) {
       });
 
       const stopReason = finishReason
-        ? mapOpenAIFinishReasonToClaude(finishReason)
+        ? mapOpenAIFinishToClaude(finishReason)
         : (hasToolCalls ? 'tool_use' : 'end_turn');
 
       emitter.finish(usage, stopReason);
@@ -671,7 +671,7 @@ export async function handleClaudeMessages(req, res) {
         (result.content ? estimateTokensFromText(result.content) : 0);
 
       const stopReason = result.finishReason
-        ? mapOpenAIFinishReasonToClaude(result.finishReason)
+        ? mapOpenAIFinishToClaude(result.finishReason)
         : (result.toolCalls?.length ? 'tool_use' : 'end_turn');
 
       const payload = {

@@ -125,12 +125,7 @@ function generateRequestBodyFromGemini(geminiRequest, modelName, token) {
   const actualModelName = modelName;
 
   // 是否启用思维链，沿用现有逻辑，避免行为不一致
-  const baseEnableThinking =
-    actualModelName.endsWith('-thinking') ||
-    actualModelName === 'gemini-2.5-pro' ||
-    actualModelName.startsWith('gemini-3-pro-') ||
-    actualModelName === 'rev19-uic3-1p' ||
-    actualModelName === 'gpt-oss-120b-medium';
+  const baseEnableThinking = isThinkingModel(actualModelName);
   const enableThinking = baseEnableThinking && !actualModelName.includes('claude');
 
   const contents = Array.isArray(geminiRequest?.contents) ? geminiRequest.contents : [];
@@ -184,9 +179,7 @@ function isThinkingModel(modelName) {
   return (
     modelName.endsWith('-thinking') ||
     modelName === 'gemini-2.5-pro' ||
-    modelName.startsWith('gemini-3-pro-') ||
-    modelName === 'rev19-uic3-1p' ||
-    modelName === 'gpt-oss-120b-medium'
+    modelName.startsWith('gemini-3-pro-')
   );
 }
 
