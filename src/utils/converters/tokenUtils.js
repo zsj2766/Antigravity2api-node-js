@@ -40,11 +40,3 @@ export function estimateTokensFromText(text, model = null) {
   // 使用乘法计算: length * 0.25 等效于 length / 4
   return Math.max(1, Math.ceil(normalized.length * ratio));
 }
-
-/**
- * 通用 Token 估算函数 (estimateTokensFromText 的别名)
- * @param {string|object} text - 文本或对象
- * @param {string} [model] - 模型名称
- * @returns {number} - 估算的 token 数量
- */
-export const estimateTokens = estimateTokensFromText;

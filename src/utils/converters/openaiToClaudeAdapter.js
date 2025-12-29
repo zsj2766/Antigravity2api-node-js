@@ -14,12 +14,12 @@
  */
 
 import { generateRequestId, generateToolUseId } from '../idGenerator.js';
-import { resolveThinkingBudget, mapClaudeToOpenAI } from './common/index.js';
+import { resolveThinkingBudget } from './thinkingConfig.js';
 
 import {
   normalizeMessagesForClaude,
   findFunctionNameByToolCallId
-} from './common/messageUtils.js';
+} from './messageUtils.js';
 import { safeJsonParse, safeJsonStringify } from '../utils.js';
 
 // ==================== 请求转换：OpenAI → Claude ====================
@@ -310,6 +310,41 @@ function convertOpenAIMessagesToClaude(messages) {
 }
 
 /**
+ * 将 OpenAI tool_choice 转换为 Claude 格式
+ * OpenAI: "auto" | "none" | "required" | {type: "function", function: {name: "xxx"}}
+ * Claude: {type: "auto"/"any"/"tool"/"none", name?: string}
+ */
+function mapOpenAIToolChoiceToClaude(toolChoice) {
+  if (!toolChoice) {
+    return { type: 'auto' };
+  }
+
+  // 字符串格式
+  if (typeof toolChoice === 'string') {
+    switch (toolChoice) {
+      case 'auto':
+        return { type: 'auto' };
+      case 'none':
+        return { type: 'none' };
+      case 'required':
+        return { type: 'any' };
+      default:
+        return { type: 'auto' };
+    }
+  }
+
+  // 对象格式：指定特定函数
+  if (toolChoice.type === 'function' && toolChoice.function?.name) {
+    return {
+      type: 'tool',
+      name: toolChoice.function.name
+    };
+  }
+
+  return { type: 'auto' };
+}
+
+/**
  * 将 OpenAI 工具定义转换为 Claude 格式
  * @param {Array} tools - OpenAI tools 数组
  * @returns {Array} - Claude tools 数组
@@ -366,6 +401,7 @@ export function mapOpenAIToClaude(body) {
   // 添加工具
   if (body.tools && body.tools.length > 0) {
     result.tools = convertOpenAIToolsToClaude(body.tools);
+    result.tool_choice = mapOpenAIToolChoiceToClaude(body.tool_choice);
   }
 
   // 添加可选参数
@@ -669,6 +705,7 @@ export {
   convertOpenAIToolResultToClaude,
   convertOpenAIMessagesToClaude,
   convertOpenAIToolsToClaude,
+  mapOpenAIToolChoiceToClaude,
   convertClaudeToolUsesToOpenAI,
   extractTextFromClaudeBlocks
 };

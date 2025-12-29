@@ -17,23 +17,12 @@
  */
 
 import { generateRequestId, generateToolCallId, generateToolUseId } from '../idGenerator.js';
-import {
-  convertClaudeImageToOpenAI,
-  extractMediaFromToolResult,
-  resolveReasoningEffort,
-  mapOpenAIToClaude,
-  writeSSE,
-  buildMessageStartPayload,
-  estimateTokensFromText,
-  countClaudeTokens,
-  convertToolCallsToClaudeBlocks,
-  buildClaudeContentBlocks
-} from './common/index.js';
+import { convertClaudeImageToOpenAI, extractMediaFromToolResult } from './imageUtils.js';
+import { resolveReasoningEffort } from './thinkingConfig.js';
+import { mapOpenAIToClaude } from './openaiToClaudeAdapter.js';
+import { writeSSE, buildMessageStartPayload, convertToolCallsToClaudeBlocks, buildClaudeContentBlocks, countClaudeTokens } from './sseUtils.js';
+import { estimateTokensFromText } from './tokenUtils.js';
 import { safeJsonStringify, safeJsonParse } from '../utils.js';
-
-const THINKING_HINT = '<antml\\b:thinking_mode>interleaved</antml><antml\\b:max_thinking_length>16000</antml>';
-const THINKING_START_TAG = '<thinking>';
-const THINKING_END_TAG = '</thinking>';
 
 // ==================== 请求转换：Claude → OpenAI ====================
 
@@ -87,15 +76,11 @@ export function convertClaudeContentToOpenAI(content) {
         break;
 
       case 'thinking':
-        // 将 thinking 内容转为带标签的文本
-        if (block.thinking) {
-          parts.push({ type: 'text', text: `${THINKING_START_TAG}${block.thinking}${THINKING_END_TAG}` });
-        }
+        // OpenAI 不支持 thinking，历史对话中的 thinking 内容不传递
         break;
 
       case 'redacted_thinking':
-        // 隐藏的思考内容，转为占位符
-        parts.push({ type: 'text', text: '[redacted thinking]' });
+        // OpenAI 不支持 thinking，直接忽略
         break;
 
       case 'tool_use':
@@ -131,9 +116,33 @@ export function convertClaudeContentToOpenAI(content) {
         break;
 
       case 'document':
-        // OpenAI 目前不直接支持文档，转为文本占位符
-        const docType = block.source?.media_type || 'application/pdf';
-        parts.push({ type: 'text', text: `[Document: ${docType}]` });
+        // 将 Claude document 转换为 OpenAI file 格式
+        hasMultimodal = true;
+        const docSource = block.source;
+        if (docSource) {
+          const mediaType = docSource.media_type || 'application/pdf';
+          const filename = block.title || `document.${mediaType.split('/')[1] || 'pdf'}`;
+
+          if (docSource.type === 'base64' && docSource.data) {
+            // base64 数据转换为 OpenAI file 格式
+            parts.push({
+              type: 'file',
+              file: {
+                filename: filename,
+                file_data: `data:${mediaType};base64,${docSource.data}`
+              }
+            });
+          } else if (docSource.type === 'url' && docSource.url) {
+            // URL 类型的文档
+            parts.push({
+              type: 'file',
+              file: {
+                filename: filename,
+                file_data: docSource.url
+              }
+            });
+          }
+        }
         break;
     }
   }
@@ -233,42 +242,14 @@ export function mapClaudeToOpenAI(body, triggerSignal) {
         // 如果还有其他内容（非 tool_result），添加为用户消息
         const { content } = convertClaudeContentToOpenAI(message.content);
         if (content && (typeof content === 'string' ? content.trim() : content.length > 0)) {
-          let finalContent = content;
-          // 如果启用 thinking 且是用户消息，追加提示
-          if (body.thinking && body.thinking.type === 'enabled') {
-            if (typeof finalContent === 'string') {
-              finalContent = `${finalContent}${THINKING_HINT}`;
-            } else if (Array.isArray(finalContent)) {
-              const lastTextIdx = finalContent.findLastIndex(p => p.type === 'text');
-              if (lastTextIdx >= 0) {
-                finalContent[lastTextIdx].text += THINKING_HINT;
-              } else {
-                finalContent.push({ type: 'text', text: THINKING_HINT });
-              }
-            }
-          }
           messages.push({
             role: 'user',
-            content: finalContent
+            content
           });
         }
       } else {
         // 普通用户消息
-        let { content } = convertClaudeContentToOpenAI(message.content);
-
-        // 如��启用 thinking，追加提示
-        if (body.thinking && body.thinking.type === 'enabled') {
-          if (typeof content === 'string') {
-            content = `${content}${THINKING_HINT}`;
-          } else if (Array.isArray(content)) {
-            const lastTextIdx = content.findLastIndex(p => p.type === 'text');
-            if (lastTextIdx >= 0) {
-              content[lastTextIdx].text += THINKING_HINT;
-            } else {
-              content.push({ type: 'text', text: THINKING_HINT });
-            }
-          }
-        }
+        const { content } = convertClaudeContentToOpenAI(message.content);
 
         messages.push({
           role: 'user',
@@ -302,22 +283,41 @@ export function mapClaudeToOpenAI(body, triggerSignal) {
     messages
   };
 
-  // 处理 thinking -> reasoning_effort (仅针对 o1/o3 系列模型)
-  // 如果模型名称以 o1 或 o3 开头，且启用了 thinking，则转换 budget 为 reasoning_effort
-  const isReasoningModel = typeof body.model === 'string' && /^(o1|o3)/.test(body.model);
-  if (isReasoningModel && body.thinking && body.thinking.type === 'enabled') {
-    if (body.thinking.budget_tokens) {
-      result.reasoning_effort = resolveReasoningEffort(body.thinking.budget_tokens);
-    }
+  // 处理 thinking -> reasoning_effort
+  // 让目标服务决定是否支持，转换器不做模型限制
+  if (body.thinking && body.thinking.type === 'enabled' && body.thinking.budget_tokens) {
+    result.reasoning_effort = resolveReasoningEffort(body.thinking.budget_tokens);
   }
 
   // 添加工具定义
   if (body.tools && body.tools.length > 0) {
     result.tools = mapClaudeToolsToOpenAITools(body.tools);
-    result.tool_choice = 'auto';
+    result.tool_choice = mapClaudeToolChoiceToOpenAI(body.tool_choice);
   }
 
   return result;
+}
+
+/**
+ * 将 Claude tool_choice 转换为 OpenAI 格式
+ * Claude: {type: "auto"/"any"/"tool"/"none", name?: string}
+ * OpenAI: "auto"/"required"/"none" 或 {type: "function", function: {name: string}}
+ */
+export function mapClaudeToolChoiceToOpenAI(toolChoice) {
+  if (!toolChoice) return 'auto';
+
+  switch (toolChoice.type) {
+    case 'auto':
+      return 'auto';
+    case 'any':
+      return 'required';
+    case 'tool':
+      return { type: 'function', function: { name: toolChoice.name } };
+    case 'none':
+      return 'none';
+    default:
+      return 'auto';
+  }
 }
 
 /**

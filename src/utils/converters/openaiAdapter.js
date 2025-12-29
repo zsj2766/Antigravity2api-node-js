@@ -9,7 +9,9 @@
 import config from '../../config/config.js';
 import { generateRequestId, isThinkingModel, generateGenerationConfig } from '../utils.js';
 import { generateToolCallId, generateReasoningId } from '../idGenerator.js';
-import { extractImagesFromContent, cleanJsonSchema, mapGeminiStopReason } from './common/index.js';
+import { extractImagesFromContent } from './imageUtils.js';
+import { cleanJsonSchema } from './schemaUtils.js';
+import { mapGeminiStopReason } from './stopReasonMapper.js';
 import {
   getThoughtSignature,
   getTextThoughtSignature,
@@ -18,7 +20,7 @@ import {
   registerThoughtSignature
 } from '../utils.js';
 import { saveBase64Image } from '../imageStorage.js';
-import { generateDeterministicToolCallId } from './common/messageUtils.js';
+import { generateDeterministicToolCallId } from './messageUtils.js';
 
 // PDF MIME 类型检测
 const PDF_MIME_TYPE = 'application/pdf';
@@ -57,6 +59,10 @@ function handleUserMessage(extracted, antigravityMessages) {
 
 /**
  * 处理工具调用结果消息
+ *
+ * 注意：根据 OpenAI 官方 API 规范（2025），tool 消息的 content 仅支持字符串格式，
+ * 不支持多模态数组。但为了兼容性，我们仍然尝试提取可能的图片/文档数据。
+ * 如果输入是非标准的多模态数组，会尽力转换；如果是标准字符串，直接使用。
  */
 function handleToolCall(message, antigravityMessages) {
   let functionName = '';
@@ -73,31 +79,40 @@ function handleToolCall(message, antigravityMessages) {
     }
   }
 
-  let output = message.content;
-  if (typeof output === 'object' && output !== null) {
-    output = output.text || JSON.stringify(output);
-  } else if (Array.isArray(output)) {
-    const textItem = output.find(item => item?.type === 'text' || typeof item === 'string');
-    output = textItem?.text || textItem || JSON.stringify(output);
-  }
+  // 使用 extractImagesFromContent 提取文本、图片和文档
+  const extracted = extractImagesFromContent(message.content);
 
-  const lastMessage = antigravityMessages[antigravityMessages.length - 1];
-  const functionResponse = {
+  const parts = [];
+
+  // 添加 functionResponse
+  parts.push({
     functionResponse: {
       id: message.tool_call_id,
       name: functionName,
       response: {
-        output: output
+        output: extracted.text || ''
       }
     }
-  };
+  });
 
+  // 添加图片
+  if (extracted.images?.length > 0) {
+    parts.push(...extracted.images);
+  }
+
+  // 添加文档
+  if (extracted.documents?.length > 0) {
+    parts.push(...extracted.documents);
+  }
+
+  // 合并或新增消息
+  const lastMessage = antigravityMessages[antigravityMessages.length - 1];
   if (lastMessage?.role === "user" && lastMessage.parts.some(p => p.functionResponse)) {
-    lastMessage.parts.push(functionResponse);
+    lastMessage.parts.push(...parts);
   } else {
     antigravityMessages.push({
       role: "user",
-      parts: [functionResponse]
+      parts
     });
   }
 }
@@ -229,12 +244,54 @@ function convertOpenAIToolsToAntigravity(tools) {
 }
 
 /**
+ * 将 OpenAI tool_choice 转换为 Gemini functionCallingConfig
+ * OpenAI: "auto" | "none" | "required" | {type: "function", function: {name: "xxx"}}
+ * Gemini: {mode: "AUTO" | "ANY" | "NONE", allowed_function_names?: [...]}
+ */
+function mapOpenAIToolChoiceToGemini(toolChoice, tools) {
+  // 默认使用 AUTO（实际服务可能使用 VALIDATED）
+  if (!toolChoice) {
+    return { mode: "AUTO" };
+  }
+
+  // 字符串格式
+  if (typeof toolChoice === 'string') {
+    switch (toolChoice) {
+      case 'auto':
+        return { mode: "AUTO" };
+      case 'none':
+        return { mode: "NONE" };
+      case 'required':
+        return { mode: "ANY" };
+      default:
+        return { mode: "AUTO" };
+    }
+  }
+
+  // 对象格式：指定特定函数
+  if (toolChoice.type === 'function' && toolChoice.function?.name) {
+    return {
+      mode: "ANY",
+      allowed_function_names: [toolChoice.function.name]
+    };
+  }
+
+  return { mode: "AUTO" };
+}
+
+/**
  * 生成完整的 Antigravity 请求体
  */
-function generateRequestBody(openaiMessages, modelName, parameters, openaiTools, token) {
+function generateRequestBody(openaiMessages, modelName, parameters, openaiTools, token, toolChoice) {
   const actualModelName = modelName;
   const enableThinking = isThinkingModel(modelName);
   const contents = openaiMessageToAntigravity(openaiMessages, actualModelName);
+
+  // 构建 toolConfig
+  const hasTools = openaiTools && openaiTools.length > 0;
+  const functionCallingConfig = hasTools
+    ? mapOpenAIToolChoiceToGemini(toolChoice, openaiTools)
+    : { mode: "NONE" };
 
   return {
     project: token.projectId,
@@ -247,9 +304,7 @@ function generateRequestBody(openaiMessages, modelName, parameters, openaiTools,
       },
       tools: convertOpenAIToolsToAntigravity(openaiTools),
       toolConfig: {
-        functionCallingConfig: {
-          mode: "VALIDATED"
-        }
+        functionCallingConfig
       },
       generationConfig: generateGenerationConfig(parameters, enableThinking, actualModelName),
       sessionId: token.sessionId
@@ -413,6 +468,7 @@ export {
   generateRequestBody,
   openaiMessageToAntigravity,
   convertOpenAIToolsToAntigravity,
+  mapOpenAIToolChoiceToGemini,
   handleUserMessage,
   handleToolCall,
   handleAssistantMessage,

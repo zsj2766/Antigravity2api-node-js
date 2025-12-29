@@ -39,9 +39,7 @@ export {
 export {
   mapClaudeToOpenAI,
   mapClaudeToolsToOpenAITools,
-  ClaudeToOpenaiSseEmitter,
-  countClaudeTokens as countClaudeTokensForOpenAI,
-  buildClaudeContentBlocks as buildClaudeContentBlocksForOpenAI
+  ClaudeToOpenaiSseEmitter
 } from './claudeToOpenaiAdapter.js';
 
 // OpenAI → Claude Adapter (新增)
@@ -61,4 +59,4 @@ export {
   mapClaudeToOpenAI as mapClaudeStopReasonToOpenAI,
   mapOpenAIToClaude as mapOpenAIFinishReasonToClaude,
   STOP_REASON_MAP
-} from './common/index.js';
+} from './stopReasonMapper.js';

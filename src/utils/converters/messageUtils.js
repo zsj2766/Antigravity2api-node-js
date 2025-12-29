@@ -7,7 +7,7 @@
  * - OpenAI 允许连续同角色消息
  */
 
-import { generateRequestId } from '../../idGenerator.js';
+import { generateRequestId } from '../idGenerator.js';
 
 /**
  * 从 OpenAI 消息数组中提取 system 消息

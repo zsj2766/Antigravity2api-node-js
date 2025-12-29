@@ -21,6 +21,33 @@ const DOCUMENT_MIME_TYPES = [
   'application/xml'
 ];
 
+// 文件扩展名到 MIME 类型的映射
+const EXT_TO_MIME = {
+  // 图片
+  'jpg': 'image/jpeg',
+  'jpeg': 'image/jpeg',
+  'png': 'image/png',
+  'gif': 'image/gif',
+  'webp': 'image/webp',
+  'svg': 'image/svg+xml',
+  // 文档
+  'pdf': 'application/pdf',
+  'csv': 'text/csv',
+  'txt': 'text/plain',
+  'json': 'application/json',
+  'html': 'text/html',
+  'xml': 'application/xml'
+};
+
+/**
+ * 根据文件名推断 MIME 类型
+ */
+function guessMimeTypeFromFilename(filename) {
+  if (!filename) return 'application/octet-stream';
+  const ext = filename.split('.').pop()?.toLowerCase();
+  return EXT_TO_MIME[ext] || 'application/octet-stream';
+}
+
 /**
  * 从 OpenAI 消息内容中提取文本和图片
  * 支持多种图片格式：OpenAI image_url、Claude image source
@@ -72,6 +99,46 @@ function extractImagesFromContent(content) {
               mimeType: 'image/jpeg' // 默认 JPEG，实际可能需要根据 URL 推断
             }
           });
+        }
+      } else if (item.type === 'file' && item.file?.file_data) {
+        // OpenAI file 格式：{type: "file", file: {filename: "...", file_data: "data:...;base64,..."}}
+        const match = item.file.file_data.match(BASE64_DATA_REGEX);
+        if (match) {
+          const mimeType = match[1];
+          const base64Data = match[2];
+          if (mimeType.startsWith('image/')) {
+            result.images.push({
+              inlineData: {
+                mimeType: mimeType,
+                data: base64Data
+              }
+            });
+          } else if (isDocumentMimeType(mimeType)) {
+            result.documents.push({
+              inlineData: {
+                mimeType: mimeType,
+                data: base64Data
+              }
+            });
+          }
+        } else if (item.file.file_data.startsWith('http://') || item.file.file_data.startsWith('https://')) {
+          // URL 类型的文件
+          const mimeType = guessMimeTypeFromFilename(item.file.filename);
+          if (mimeType.startsWith('image/')) {
+            result.images.push({
+              fileData: {
+                fileUri: item.file.file_data,
+                mimeType: mimeType
+              }
+            });
+          } else if (isDocumentMimeType(mimeType)) {
+            result.documents.push({
+              fileData: {
+                fileUri: item.file.file_data,
+                mimeType: mimeType
+              }
+            });
+          }
         }
       }
     }

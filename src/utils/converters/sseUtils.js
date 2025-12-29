@@ -5,8 +5,8 @@
  * 被 anthropicAdapter.js 和 claudeToOpenaiAdapter.js 共同使用
  */
 
-import { safeJsonParse } from '../../utils.js';
-import { generateToolUseId } from '../../idGenerator.js';
+import { safeJsonParse } from '../utils.js';
+import { generateToolUseId } from '../idGenerator.js';
 import { estimateTokensFromText } from './tokenUtils.js';
 
 // ==================== Token 估算 ====================

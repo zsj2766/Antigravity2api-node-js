@@ -17,7 +17,27 @@ import {
   safeJsonParse,
   safeJsonStringify
 } from '../utils.js';
-import { convertClaudeImageToGemini, convertClaudeDocumentToGemini, extractMediaFromToolResult, cleanJsonSchema, mapGeminiStopReason, writeSSE, buildMessageStartPayload, estimateTokensFromText, countClaudeTokens, convertToolCallsToClaudeBlocks, buildClaudeContentBlocks } from './common/index.js';
+import {
+  convertClaudeImageToGemini,
+  convertClaudeDocumentToGemini,
+  extractMediaFromToolResult
+} from './imageUtils.js';
+import { cleanJsonSchema } from './schemaUtils.js';
+import { mapGeminiStopReason } from './stopReasonMapper.js';
+import { writeSSE, buildMessageStartPayload, convertToolCallsToClaudeBlocks, buildClaudeContentBlocks, countClaudeTokens } from './sseUtils.js';
+import { estimateTokensFromText } from './tokenUtils.js';
+import { SignatureManager, rememberToolThoughtSignature } from './signatureManager.js';
+import {
+  createWebSearchState,
+  extractGroundingData,
+  hasGroundingData,
+  emitWebSearchBlocksForEmitter,
+  resolveWebSearchRedirectUrls,
+  toWebSearchResults,
+  buildCitationFromSupport,
+  makeSrvToolUseId
+} from './webSearchEmitter.js';
+import { maybeInjectMcpHintIntoSystemText, hasMcpTools, filterMcpTools } from '../../mcp/claudeTransformerMcp.js';
 
 // ==================== 请求转换：Claude → Gemini ====================
 
@@ -354,6 +374,33 @@ function convertClaudeToolsToAntigravity(tools) {
 }
 
 /**
+ * 将 Claude tool_choice 转换为 Gemini functionCallingConfig
+ * Claude: {type: "auto"/"any"/"tool"/"none", name?: string}
+ * Gemini: {mode: "AUTO"/"ANY"/"NONE", allowed_function_names?: [...]}
+ */
+function mapClaudeToolChoiceToGemini(toolChoice) {
+  if (!toolChoice) {
+    return { mode: "AUTO" };
+  }
+
+  switch (toolChoice.type) {
+    case 'auto':
+      return { mode: "AUTO" };
+    case 'any':
+      return { mode: "ANY" };
+    case 'tool':
+      return {
+        mode: "ANY",
+        allowed_function_names: [toolChoice.name]
+      };
+    case 'none':
+      return { mode: "NONE" };
+    default:
+      return { mode: "AUTO" };
+  }
+}
+
+/**
  * 从 Claude 请求体生成完整的 Antigravity 请求体
  *
  * @param {object} claudeBody - Claude Messages API 请求体
@@ -392,6 +439,12 @@ function generateRequestBodyFromAnthropic(claudeBody, token) {
     thinking: claudeBody.thinking
   };
 
+  // 构建 toolConfig
+  const hasTools = claudeBody.tools && claudeBody.tools.length > 0;
+  const functionCallingConfig = hasTools
+    ? mapClaudeToolChoiceToGemini(claudeBody.tool_choice)
+    : { mode: "NONE" };
+
   // 构建请求体
   return {
     project: token.projectId,
@@ -404,9 +457,7 @@ function generateRequestBodyFromAnthropic(claudeBody, token) {
       },
       tools: convertClaudeToolsToAntigravity(claudeBody.tools),
       toolConfig: {
-        functionCallingConfig: {
-          mode: "VALIDATED"
-        }
+        functionCallingConfig
       },
       generationConfig: generateGenerationConfig(parameters, enableThinking, modelName),
       sessionId: token.sessionId
@@ -430,6 +481,13 @@ class ClaudeSseEmitter {
     this.finished = false;
     this.hasStarted = false;
     this.totalOutputTokens = 0;
+    // 新增：签名管理器
+    this.signatures = new SignatureManager();
+    this.trailingSignature = null;
+    this.hasThinking = false;
+    // 新增：web search 状态
+    this.webSearchMode = false;
+    this.webSearch = createWebSearchState();
   }
 
   start() {
@@ -439,7 +497,6 @@ class ClaudeSseEmitter {
   }
 
   ensureTextBlock() {
-    // 容错机制：自动补发 message_start
     if (!this.hasStarted) this.start();
     if (this.textBlockIndex !== null) return;
     this.textBlockIndex = this.nextIndex++;
@@ -451,20 +508,18 @@ class ClaudeSseEmitter {
   }
 
   ensureThinkingBlock() {
-    // 容错机制：自动补发 message_start
     if (!this.hasStarted) this.start();
     if (this.thinkingBlockIndex !== null) return;
     this.thinkingBlockIndex = this.nextIndex++;
     writeSSE(this.res, 'content_block_start', {
       type: 'content_block_start',
       index: this.thinkingBlockIndex,
-      content_block: { type: 'thinking', thinking: '' }
+      content_block: { type: 'thinking', thinking: '', signature: '' }
     });
   }
 
   sendText(text) {
     if (!text) return;
-    // 确保思考块先结束，避免与正文交叉
     this.closeThinkingBlock();
     this.ensureTextBlock();
     this.totalOutputTokens += estimateTokensFromText(text);
@@ -477,15 +532,29 @@ class ClaudeSseEmitter {
 
   sendThinking(thinking) {
     if (!thinking) return;
-    // thinking 到来时关闭已有正文块，避免嵌套
     this.closeTextBlock();
     this.ensureThinkingBlock();
+    this.hasThinking = true;
     this.totalOutputTokens += estimateTokensFromText(thinking);
     writeSSE(this.res, 'content_block_delta', {
       type: 'content_block_delta',
       index: this.thinkingBlockIndex,
       delta: { type: 'thinking_delta', thinking }
     });
+  }
+
+  sendSignature(signature) {
+    if (!signature) return;
+    this.ensureThinkingBlock();
+    writeSSE(this.res, 'content_block_delta', {
+      type: 'content_block_delta',
+      index: this.thinkingBlockIndex,
+      delta: { type: 'signature_delta', signature }
+    });
+  }
+
+  storeSignature(signature) {
+    this.signatures.store(signature);
   }
 
   async sendToolCalls(toolCalls = []) {
@@ -498,17 +567,24 @@ class ClaudeSseEmitter {
       const args = call?.function?.arguments ?? '{}';
       const inputJson = typeof args === 'string' ? args : JSON.stringify(args);
       this.totalOutputTokens += estimateTokensFromText(inputJson);
+
+      const toolUseBlock = {
+        type: 'tool_use',
+        id: call.id || generateToolUseId(),
+        name: call?.function?.name || 'tool',
+        input: {}
+      };
+
+      if (call.signature) {
+        toolUseBlock.signature = call.signature;
+        rememberToolThoughtSignature(toolUseBlock.id, call.signature);
+      }
+
       writeSSE(this.res, 'content_block_start', {
         type: 'content_block_start',
         index,
-        content_block: {
-          type: 'tool_use',
-          id: call.id || generateToolUseId(),
-          name: call?.function?.name || 'tool',
-          input: {}
-        }
+        content_block: toolUseBlock
       });
-      // TASK-130: 增量发送 JSON 片段
       const CHUNK_SIZE = 128;
       for (let i = 0; i < inputJson.length; i += CHUNK_SIZE) {
         const chunk = inputJson.slice(i, i + CHUNK_SIZE);
@@ -518,7 +594,6 @@ class ClaudeSseEmitter {
           delta: { type: 'input_json_delta', partial_json: chunk }
         });
       }
-
       writeSSE(this.res, 'content_block_stop', { type: 'content_block_stop', index });
     });
   }
@@ -532,45 +607,64 @@ class ClaudeSseEmitter {
 
   async closeThinkingBlock() {
     if (this.thinkingBlockIndex === null) return;
+    if (this.signatures.hasPending()) {
+      this.sendSignature(this.signatures.consume());
+    }
     const index = this.thinkingBlockIndex;
     this.thinkingBlockIndex = null;
     writeSSE(this.res, 'content_block_stop', { type: 'content_block_stop', index });
   }
 
-  finish(usage, stopReason = null) {
+  emitTrailingSignature() {
+    if (!this.trailingSignature || !this.hasThinking) {
+      this.trailingSignature = null;
+      return;
+    }
+    const index = this.nextIndex++;
+    writeSSE(this.res, 'content_block_start', {
+      type: 'content_block_start',
+      index,
+      content_block: { type: 'thinking', thinking: '', signature: '' }
+    });
+    writeSSE(this.res, 'content_block_delta', {
+      type: 'content_block_delta',
+      index,
+      delta: { type: 'thinking_delta', thinking: '' }
+    });
+    writeSSE(this.res, 'content_block_delta', {
+      type: 'content_block_delta',
+      index,
+      delta: { type: 'signature_delta', signature: this.trailingSignature }
+    });
+    writeSSE(this.res, 'content_block_stop', { type: 'content_block_stop', index });
+    this.trailingSignature = null;
+  }
+
+  finish(usage, stopReason = null, extraUsage = null) {
     if (this.finished) return;
     this.finished = true;
     this.closeTextBlock();
     this.closeThinkingBlock();
+    this.emitTrailingSignature();
 
-    const outputTokens =
-      usage?.completion_tokens ??
-      usage?.output_tokens ??
-      (this.totalOutputTokens ?? 0);
-    const inputTokens =
-      usage?.prompt_tokens ??
-      usage?.input_tokens ??
-      (this.inputTokens ?? null);
-
-    // 提取缓存统计字段
+    const outputTokens = usage?.completion_tokens ?? usage?.output_tokens ?? (this.totalOutputTokens ?? 0);
+    const inputTokens = usage?.prompt_tokens ?? usage?.input_tokens ?? (this.inputTokens ?? null);
     const cacheCreationTokens = usage?.cache_creation_input_tokens ?? 0;
-    const cacheReadTokens =
-      usage?.cache_read_input_tokens ??
-      usage?.prompt_tokens_details?.cached_tokens ??
-      0;
-
-    // 使用传入的 stopReason，默认为 'end_turn'
+    const cacheReadTokens = usage?.cache_read_input_tokens ?? usage?.prompt_tokens_details?.cached_tokens ?? 0;
     const finalStopReason = stopReason || 'end_turn';
+
+    const finalUsage = {
+      input_tokens: inputTokens || 0,
+      output_tokens: outputTokens || 0,
+      cache_creation_input_tokens: cacheCreationTokens,
+      cache_read_input_tokens: cacheReadTokens,
+      ...(extraUsage || {})
+    };
 
     writeSSE(this.res, 'message_delta', {
       type: 'message_delta',
       delta: { stop_reason: finalStopReason, stop_sequence: null },
-      usage: {
-        input_tokens: inputTokens || 0,
-        output_tokens: outputTokens || 0,
-        cache_creation_input_tokens: cacheCreationTokens,
-        cache_read_input_tokens: cacheReadTokens
-      }
+      usage: finalUsage
     });
     writeSSE(this.res, 'message_stop', { type: 'message_stop' });
     this.res.end();
