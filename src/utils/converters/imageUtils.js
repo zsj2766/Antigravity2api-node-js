@@ -49,8 +49,14 @@ function guessMimeTypeFromFilename(filename) {
 }
 
 /**
- * 从 OpenAI 消息内容中提取文本和图片
- * 支持多种图片格式：OpenAI image_url、Claude image source
+ * 从 OpenAI 消息内容中提取文本、图片和文档
+ *
+ * 支持 OpenAI 格式：
+ * - { type: "text", text: "..." }
+ * - { type: "image_url", image_url: { url: "..." } }
+ * - { type: "file", file: { filename: "...", file_data: "..." } }
+ *
+ * 输出 Gemini 格式：inlineData / fileData
  */
 function extractImagesFromContent(content) {
   const result = { text: '', images: [], documents: [] };
