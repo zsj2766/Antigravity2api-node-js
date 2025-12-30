@@ -15,6 +15,7 @@
  */
 
 import { generateRequestId, generateToolUseId } from '../idGenerator.js';
+import { ToolConverter } from './common/toolConverter.js';
 import { resolveThinkingBudget } from './thinkingConfig.js';
 import { mapOpenAIFinishToClaude } from './stopReasonMapper.js';
 import { writeSSE, buildMessageStartPayload } from './sseUtils.js';
@@ -23,10 +24,10 @@ import { estimateTokensFromText } from './tokenUtils.js';
 import { normalizeMessagesForClaude } from './messageUtils.js';
 import { safeJsonParse, safeJsonStringify } from '../utils.js';
 
-// ==================== 请求转换：OpenAI → Claude ====================
+// ==================== 【请求转换】OpenAI → Claude ====================
 
 /**
- * 将 OpenAI image_url 转换为 Claude image source
+ * 【请求转换】将 OpenAI image_url 转换为 Claude image source
  * @param {object} imageUrl - OpenAI image_url 对象
  * @returns {object|null} - Claude image block 或 null
  */
@@ -359,22 +360,14 @@ function mapOpenAIToolChoiceToClaude(toolChoice) {
  * @returns {Array} - Claude tools 数组
  */
 function convertOpenAIToolsToClaude(tools) {
-  if (!Array.isArray(tools)) return [];
-
-  return tools.map(tool => {
-    if (tool.type === 'function' && tool.function) {
-      return {
-        name: tool.function.name,
-        description: tool.function.description,
-        input_schema: tool.function.parameters || { type: 'object', properties: {} }
-      };
-    }
-    return null;
-  }).filter(Boolean);
+  return ToolConverter.toClaude(tools);
 }
 
 /**
- * 将 OpenAI 请求体转换为 Claude 格式
+ * 【请求转换 · 主入口】将 OpenAI Chat Completions API 请求体转换为 Claude Messages API 格式
+ *
+ * 转换方向: OpenAI → Claude
+ *
  * @param {object} body - OpenAI 请求体
  * @returns {object} - Claude 请求体
  */
@@ -474,11 +467,13 @@ function ensureAlternatingRoles(messages) {
   return result;
 }
 
-// ==================== SSE 流式响应转换 ====================
+// ==================== 【响应转换】OpenAI SSE → Claude SSE ====================
 
 /**
- * OpenAI → Claude SSE 响应发射器类
+ * 【响应转换】OpenAI → Claude SSE 响应发射器类
  * 用于将 OpenAI 流式响应转换为 Claude SSE 格式
+ *
+ * 转换方向: OpenAI SSE Stream → Claude SSE Stream
  */
 export class OpenAIToClaudeSseEmitter {
   constructor(res, requestId, { model, inputTokens } = {}) {

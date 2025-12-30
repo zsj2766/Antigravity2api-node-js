@@ -26,10 +26,10 @@ import { generateDeterministicToolCallId } from './messageUtils.js';
 const PDF_MIME_TYPE = 'application/pdf';
 const BASE64_PDF_REGEX = /^data:application\/pdf;base64,(.+)$/;
 
-// ==================== 请求转换：OpenAI → Gemini ====================
+// ==================== 【请求转换】OpenAI → Gemini ====================
 
 /**
- * 处理用户消息，转换为 Antigravity 格式
+ * 【请求转换】处理用户消息，转换为 Antigravity/Gemini 格式
  */
 function handleUserMessage(extracted, antigravityMessages) {
   const parts = [];
@@ -280,7 +280,9 @@ function mapOpenAIToolChoiceToGemini(toolChoice, tools) {
 }
 
 /**
- * 生成完整的 Antigravity 请求体
+ * 【请求转换 · 主入口】生成完整的 Antigravity/Gemini 请求体
+ *
+ * 转换方向: OpenAI → Gemini
  */
 function generateRequestBody(openaiMessages, modelName, parameters, openaiTools, token, toolChoice) {
   const actualModelName = modelName;
@@ -314,10 +316,12 @@ function generateRequestBody(openaiMessages, modelName, parameters, openaiTools,
   };
 }
 
-// ==================== 响应转换：Gemini → OpenAI ====================
+// ==================== 【响应转换】Gemini → OpenAI ====================
 
 /**
- * 转换 functionCall 为 OpenAI 格式
+ * 【响应转换】转换 Gemini functionCall 为 OpenAI tool_call 格式
+ *
+ * 转换方向: Gemini functionCall → OpenAI tool_call
  */
 function convertGeminiToOpenAIToolCall(functionCall) {
   return {
@@ -387,7 +391,9 @@ function flushTextAccumulator(state) {
 }
 
 /**
- * 解析 SSE 流式响应片段并通过 callback 发送
+ * 【响应转换 · 流式】解析 Gemini SSE 流式响应片段并通过 callback 发送
+ *
+ * 转换方向: Gemini SSE Stream → OpenAI SSE Stream
  */
 function parseGeminiStreamToOpenAI(line, state, callback) {
   if (!line.startsWith('data: ')) return;
@@ -484,10 +490,13 @@ export {
   convertGeminiPartsToOpenAIContent
 };
 
-// ==================== Gemini → OpenAI 辅助转换 ====================
+// ==================== 【响应转换】Gemini → OpenAI 辅助函数 ====================
 
 /**
- * 将 Gemini fileData 转换为 OpenAI 兼容格式
+ * 【响应转换】将 Gemini fileData 转换为 OpenAI 兼容格式
+ *
+ * 转换方向: Gemini fileData → OpenAI content part
+ *
  * @param {object} fileData - Gemini fileData 对象 {mimeType, fileUri}
  * @returns {object|null} - OpenAI content part
  */
@@ -525,7 +534,10 @@ function convertGeminiFileDataToOpenAI(fileData) {
 }
 
 /**
- * 将 Gemini inlineData 转换为 OpenAI image_url 格式
+ * 【响应转换】将 Gemini inlineData 转换为 OpenAI image_url 格式
+ *
+ * 转换方向: Gemini inlineData → OpenAI image_url
+ *
  * @param {object} inlineData - Gemini inlineData 对象 {mimeType, data}
  * @returns {object|null} - OpenAI image_url 格式或 null
  */
@@ -561,7 +573,10 @@ function convertGeminiInlineDataToOpenAI(inlineData) {
 }
 
 /**
- * 将 Gemini parts 数组转换为 OpenAI content 格式
+ * 【响应转换】将 Gemini parts 数组转换为 OpenAI content 格式
+ *
+ * 转换方向: Gemini parts → OpenAI content
+ *
  * @param {Array} parts - Gemini parts 数组
  * @returns {{ content: string|Array, toolCalls: Array }}
  */

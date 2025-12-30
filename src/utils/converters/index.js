@@ -60,3 +60,22 @@ export {
   mapOpenAIFinishToClaude,
   STOP_REASON_MAP
 } from './stopReasonMapper.js';
+
+// Common Utilities - Tool Converter
+export { ToolConverter } from './common/toolConverter.js';
+
+// Common Utilities - Content Converter
+export {
+  ContentConverter,
+  convertGeminiToOpenAI,
+  convertGeminiToClaude,
+  convertClaudeToOpenAI,
+  convertOpenAIToClaude,
+  convertToolCallsToClaude,
+  convertToolCallsToOpenAI
+} from './common/contentConverter.js';
+
+// Common Utilities - SSE Emitter Base Classes
+export { BaseSseEmitter } from './common/BaseSseEmitter.js';
+export { ClaudeProtocolEmitter } from './common/ClaudeProtocolEmitter.js';
+export { OpenAIProtocolEmitter } from './common/OpenAIProtocolEmitter.js';

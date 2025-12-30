@@ -24,8 +24,8 @@ import {
 // Claude SSE 发射器
 import { ClaudeSseEmitter } from '../../src/utils/converters/anthropicAdapter.js';
 
-// OpenAI SSE 发射器
-import { OpenAISseEmitter } from '../../src/utils/converters/openaiToClaudeAdapter.js';
+// OpenAI SSE 发射器 (使用新的 OpenAIProtocolEmitter 基类)
+import { OpenAIProtocolEmitter } from '../../src/utils/converters/common/OpenAIProtocolEmitter.js';
 
 // ==================== Mock 工具类 ====================
 
@@ -522,10 +522,10 @@ describe('ClaudeSseEmitter', () => {
 
 // ==================== 3. OpenAISseEmitter 测试 ====================
 
-describe('OpenAISseEmitter', () => {
+describe('OpenAIProtocolEmitter', () => {
   test('start() emits first chunk with role:assistant', () => {
     const res = new MockResponse();
-    const emitter = new OpenAISseEmitter(res, 'test-req', { model: 'gpt-4' });
+    const emitter = new OpenAIProtocolEmitter(res, { requestId: 'test-req', model: 'gpt-4' });
 
     emitter.start();
 
@@ -535,12 +535,12 @@ describe('OpenAISseEmitter', () => {
     assert.strictEqual(events[0].choices[0].delta.role, 'assistant');
   });
 
-  test('sendTextDelta() emits delta.content', () => {
+  test('sendText() emits delta.content', () => {
     const res = new MockResponse();
-    const emitter = new OpenAISseEmitter(res, 'test-req', { model: 'gpt-4' });
+    const emitter = new OpenAIProtocolEmitter(res, { requestId: 'test-req', model: 'gpt-4' });
 
-    emitter.sendTextDelta('Hello');
-    emitter.sendTextDelta(' World');
+    emitter.sendText('Hello');
+    emitter.sendText(' World');
 
     const events = res.getOpenAIEvents();
 
@@ -552,12 +552,12 @@ describe('OpenAISseEmitter', () => {
 
   test('tool call sequence with start/arguments/finish', () => {
     const res = new MockResponse();
-    const emitter = new OpenAISseEmitter(res, 'test-req', { model: 'gpt-4' });
+    const emitter = new OpenAIProtocolEmitter(res, { requestId: 'test-req', model: 'gpt-4' });
 
     emitter.start();
     emitter.sendToolCallStart('call_123', 'get_weather');
-    emitter.sendToolCallArgumentsDelta('{"loc');
-    emitter.sendToolCallArgumentsDelta('ation":"NYC"}');
+    emitter.sendToolCallArguments('{"loc');
+    emitter.sendToolCallArguments('ation":"NYC"}');
     emitter.finishToolCall();
 
     const events = res.getOpenAIEvents();
@@ -578,14 +578,14 @@ describe('OpenAISseEmitter', () => {
 
   test('parallel tool calls have incrementing indices', () => {
     const res = new MockResponse();
-    const emitter = new OpenAISseEmitter(res, 'test-req', { model: 'gpt-4' });
+    const emitter = new OpenAIProtocolEmitter(res, { requestId: 'test-req', model: 'gpt-4' });
 
     emitter.start();
     emitter.sendToolCallStart('call_1', 'tool_a');
-    emitter.sendToolCallArgumentsDelta('{}');
+    emitter.sendToolCallArguments('{}');
     emitter.finishToolCall();
     emitter.sendToolCallStart('call_2', 'tool_b');
-    emitter.sendToolCallArgumentsDelta('{}');
+    emitter.sendToolCallArguments('{}');
     emitter.finishToolCall();
 
     const events = res.getOpenAIEvents();
@@ -606,11 +606,11 @@ describe('OpenAISseEmitter', () => {
 
   test('finish() emits finish_reason and [DONE]', () => {
     const res = new MockResponse();
-    const emitter = new OpenAISseEmitter(res, 'test-req', { model: 'gpt-4' });
+    const emitter = new OpenAIProtocolEmitter(res, { requestId: 'test-req', model: 'gpt-4' });
 
     emitter.start();
-    emitter.sendTextDelta('Hi');
-    emitter.finish('stop', { input_tokens: 10, output_tokens: 5 });
+    emitter.sendText('Hi');
+    emitter.finish({ input_tokens: 10, output_tokens: 5 }, 'stop');
 
     const events = res.getOpenAIEvents();
     const lastTwo = events.slice(-2);
@@ -628,11 +628,11 @@ describe('OpenAISseEmitter', () => {
 
   test('complete OpenAI event sequence', () => {
     const res = new MockResponse();
-    const emitter = new OpenAISseEmitter(res, 'test-req', { model: 'gpt-4' });
+    const emitter = new OpenAIProtocolEmitter(res, { requestId: 'test-req', model: 'gpt-4' });
 
     emitter.start();
-    emitter.sendTextDelta('Hello');
-    emitter.finish('stop');
+    emitter.sendText('Hello');
+    emitter.finish({}, 'stop');
 
     const events = res.getOpenAIEvents();
 
@@ -646,10 +646,10 @@ describe('OpenAISseEmitter', () => {
 
   test('empty text is ignored', () => {
     const res = new MockResponse();
-    const emitter = new OpenAISseEmitter(res, 'test-req', { model: 'gpt-4' });
+    const emitter = new OpenAIProtocolEmitter(res, { requestId: 'test-req', model: 'gpt-4' });
 
-    emitter.sendTextDelta('');
-    emitter.sendTextDelta(null);
+    emitter.sendText('');
+    emitter.sendText(null);
 
     // 不应该有任何事件
     assert.strictEqual(res.chunks.length, 0);
@@ -657,13 +657,13 @@ describe('OpenAISseEmitter', () => {
 
   test('finished emitter ignores further calls', () => {
     const res = new MockResponse();
-    const emitter = new OpenAISseEmitter(res, 'test-req', { model: 'gpt-4' });
+    const emitter = new OpenAIProtocolEmitter(res, { requestId: 'test-req', model: 'gpt-4' });
 
     emitter.start();
-    emitter.finish('stop');
+    emitter.finish({}, 'stop');
 
     const countBefore = res.chunks.length;
-    emitter.sendTextDelta('Should be ignored');
+    emitter.sendText('Should be ignored');
 
     assert.strictEqual(res.chunks.length, countBefore);
   });
@@ -685,11 +685,11 @@ describe('Edge Cases and Error Handling', () => {
     assert.strictEqual(events[0].event, 'message_start');
   });
 
-  test('OpenAISseEmitter auto-starts on sendTextDelta', () => {
+  test('OpenAIProtocolEmitter auto-starts on sendText', () => {
     const res = new MockResponse();
-    const emitter = new OpenAISseEmitter(res, 'test-req', { model: 'gpt-4' });
+    const emitter = new OpenAIProtocolEmitter(res, { requestId: 'test-req', model: 'gpt-4' });
 
-    emitter.sendTextDelta('Hello');
+    emitter.sendText('Hello');
 
     const events = res.getOpenAIEvents();
 

@@ -33,7 +33,7 @@ import {
   convertClaudeImageToGemini,
   convertClaudeDocumentToGemini,
   extractMediaFromToolResult
-} from '../../src/utils/converters/common/imageUtils.js';
+} from '../../src/utils/converters/imageUtils.js';
 
 // Mock Base64 Data (1x1 pixel PNG)
 const MOCK_IMAGE_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';

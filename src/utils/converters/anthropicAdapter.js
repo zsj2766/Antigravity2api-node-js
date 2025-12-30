@@ -39,7 +39,7 @@ import {
 } from './webSearchEmitter.js';
 import { maybeInjectMcpHintIntoSystemText, hasMcpTools, filterMcpTools } from '../../mcp/claudeTransformerMcp.js';
 
-// ==================== 请求转换：Claude → Gemini ====================
+// ==================== 【请求转换】Claude → Gemini ====================
 
 // 正则常量
 const INVOKE_REGEX = /<invoke\b[^>]*>[\s\S]*?<\/invoke>/gi;
@@ -401,7 +401,9 @@ function mapClaudeToolChoiceToGemini(toolChoice) {
 }
 
 /**
- * 从 Claude 请求体生成完整的 Antigravity 请求体
+ * 【请求转换 · 主入口】从 Claude Messages API 请求体生成完整的 Antigravity/Gemini 请求体
+ *
+ * 转换方向: Claude → Gemini
  *
  * @param {object} claudeBody - Claude Messages API 请求体
  * @param {object} token - Token 信息（包含 projectId, sessionId）
@@ -467,8 +469,14 @@ function generateRequestBodyFromAnthropic(claudeBody, token) {
   };
 }
 
-// ==================== ClaudeSseEmitter 类 ====================
+// ==================== 【响应转换】Gemini → Claude (ClaudeSseEmitter 类) ====================
 
+/**
+ * 【响应转换 · 流式】Gemini → Claude SSE 响应发射器类
+ * 用于将 Gemini 流式响应转换为 Claude SSE 格式
+ *
+ * 转换方向: Gemini SSE Stream → Claude SSE Stream
+ */
 class ClaudeSseEmitter {
   constructor(res, requestId, { model, inputTokens } = {}) {
     this.res = res;
@@ -692,10 +700,13 @@ export {
 // 从 common/sseUtils.js 再导出以保持 API 兼容性
 export { countClaudeTokens, estimateTokensFromText, buildClaudeContentBlocks, convertToolCallsToClaudeBlocks };
 
-// ==================== Gemini → Claude 辅助转换 ====================
+// ==================== 【响应转换】Gemini → Claude 辅助函数 ====================
 
 /**
- * 将 Gemini parts 转换为 Claude 内容块数组
+ * 【响应转换】将 Gemini parts 转换为 Claude 内容块数组
+ *
+ * 转换方向: Gemini parts → Claude content blocks
+ *
  * @param {Array} parts - Gemini parts 数组
  * @returns {Array} - Claude 内容块数组
  */
@@ -782,7 +793,10 @@ function convertGeminiPartsToClaude(parts) {
 }
 
 /**
- * 将 Gemini 完整响应转换为 Claude 格式
+ * 【响应转换 · 非流式】将 Gemini 完整响应转换为 Claude 格式
+ *
+ * 转换方向: Gemini Response → Claude Response
+ *
  * @param {object} geminiResponse - Gemini 响应对象
  * @param {string} requestId - 请求 ID
  * @param {string} model - 模型名称

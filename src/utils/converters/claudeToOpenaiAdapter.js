@@ -17,6 +17,7 @@
  */
 
 import { generateRequestId, generateToolCallId } from '../idGenerator.js';
+import { ToolConverter } from './common/toolConverter.js';
 import { convertClaudeImageToOpenAI, extractMediaFromToolResult } from './imageUtils.js';
 import { resolveReasoningEffort } from './thinkingConfig.js';
 import { mapClaudeStopToOpenAI } from './stopReasonMapper.js';
@@ -24,10 +25,10 @@ import { convertToolCallsToClaudeBlocks, buildClaudeContentBlocks, countClaudeTo
 import { estimateTokensFromText } from './tokenUtils.js';
 import { safeJsonStringify, safeJsonParse } from '../utils.js';
 
-// ==================== 请求转换：Claude → OpenAI ====================
+// ==================== 【请求转换】Claude → OpenAI ====================
 
 /**
- * 将 Claude tool_use 块转换为 OpenAI tool_calls 格式
+ * 【请求转换】将 Claude tool_use 块转换为 OpenAI tool_calls 格式
  * @param {Array} blocks - Claude 内容块数组
  * @returns {Array} - OpenAI tool_calls 数组
  */
@@ -186,7 +187,10 @@ function mapClaudeRole(role) {
 }
 
 /**
- * 将 Claude 请求体转换为 OpenAI 格式
+ * 【请求转换 · 主入口】将 Claude Messages API 请求体转换为 OpenAI Chat Completions API 格式
+ *
+ * 转换方向: Claude → OpenAI
+ *
  * 重构版：使用原生 tool_calls 替代 XML hack
  */
 export function mapClaudeToOpenAI(body, triggerSignal) {
@@ -324,41 +328,15 @@ export function mapClaudeToolChoiceToOpenAI(toolChoice) {
  * 将 Claude 工具定义转换为 OpenAI 格式
  */
 export function mapClaudeToolsToOpenAITools(tools = []) {
-  if (!Array.isArray(tools)) return [];
-  return tools.map(tool => ({
-    type: 'function',
-    function: {
-      name: tool?.name,
-      description: tool?.description,
-      parameters: tool?.input_schema || {}
-    }
-  }));
+  return ToolConverter.toOpenAI(tools);
 }
 
-// ==================== 响应转换：Claude → OpenAI（非流式）====================
+// ==================== 【响应转换】Claude → OpenAI（非流式）====================
 
 // 从 common/sseUtils.js 再导出以保持 API 兼容性
 export { convertToolCallsToClaudeBlocks, estimateTokensFromText, countClaudeTokens, buildClaudeContentBlocks };
 
-/**
- * 将 Claude tool_use 块转换为 OpenAI tool_calls
- * @param {Array} blocks - Claude 内容块数组
- * @returns {Array} - OpenAI tool_calls 数组
- */
-function convertClaudeToolUsesToOpenAI(blocks) {
-  if (!Array.isArray(blocks)) return [];
-
-  return blocks
-    .filter(b => b.type === 'tool_use')
-    .map(b => ({
-      id: b.id,
-      type: 'function',
-      function: {
-        name: b.name,
-        arguments: safeJsonStringify(b.input, '{}')
-      }
-    }));
-}
+// 注意：使用 extractToolUsesAsOpenAIToolCalls 替代（功能完全相同）
 
 /**
  * 从 Claude 内容块中提取文本
@@ -375,7 +353,10 @@ function extractTextFromClaudeBlocks(blocks) {
 }
 
 /**
- * 将 Claude 非流式响应转换为 OpenAI 格式
+ * 【响应转换 · 非流式】将 Claude 非流式响应转换为 OpenAI 格式
+ *
+ * 转换方向: Claude Response → OpenAI Response
+ *
  * @param {object} claudeResponse - Claude 响应
  * @param {string} requestId - 请求 ID
  * @returns {object} - OpenAI 格式响应
@@ -383,7 +364,7 @@ function extractTextFromClaudeBlocks(blocks) {
 export function convertClaudeResponseToOpenAI(claudeResponse, requestId) {
   const content = claudeResponse.content || [];
   const text = extractTextFromClaudeBlocks(content);
-  const toolCalls = convertClaudeToolUsesToOpenAI(content);
+  const toolCalls = extractToolUsesAsOpenAIToolCalls(content);
 
   const message = {
     role: 'assistant',
@@ -415,11 +396,13 @@ export function convertClaudeResponseToOpenAI(claudeResponse, requestId) {
   };
 }
 
-// ==================== SSE 流式响应转换 ====================
+// ==================== 【响应转换】Claude SSE → OpenAI SSE ====================
 
 /**
- * Claude → OpenAI SSE 响应发射器类
+ * 【响应转换 · 流式】Claude → OpenAI SSE 响应发射器类
  * 用于将 Claude 流式响应转换为 OpenAI SSE 格式
+ *
+ * 转换方向: Claude SSE Stream → OpenAI SSE Stream
  */
 export class ClaudeToOpenAISseEmitter {
   constructor(res, requestId, { model } = {}) {
