@@ -18,7 +18,14 @@ import {
   AUDIO_FORMAT_MIME,
   EXTENSION_MIME_MAP
 } from '../common/index.js';
-import { getThoughtSignature, getTextThoughtSignature, safeJsonParse, safeJsonStringify } from '../../utils/utils.js';
+import {
+  getThoughtSignature,
+  getTextThoughtSignature,
+  safeJsonParse,
+  safeJsonStringify
+} from '../../utils/utils.js';
+
+const THOUGHT_SIGNATURE_SKIP = 'skip_thought_signature_validator';
 
 export class OpenAIToGeminiRequestConverter extends IRequestConverter {
   /**
@@ -39,7 +46,8 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
     const { messages, tools, tool_choice, ...parameters } = body;
     const modelName = context.model || body.model || 'gemini-pro';
 
-    const contents = this.convertMessages(messages, modelName);
+    const enableThinking = this.resolveThinkingEnabled(parameters, modelName);
+    const contents = this.convertMessages(messages, modelName, enableThinking);
     const geminiTools = this.convertTools(tools);
     // 传入 modelName 以支持 VALIDATED 模式判断
     const toolConfig = this.convertToolConfig(tool_choice, tools, modelName);
@@ -52,6 +60,7 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
 
     // 确保消息角色交替（Gemini 强制要求 User/Model 交替）
     const mergedContents = mergeConsecutiveRoles(contents);
+    this.ensureThinkingPrefixForToolCalls(mergedContents, modelName, enableThinking);
     if (mergedContents.length === 0) {
       mergedContents.push({ role: 'user', parts: [{ text: '' }] });
     } else if (mergedContents[0].role !== 'user') {
@@ -81,9 +90,10 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
    *
    * @param {Array} messages - OpenAI 消息数组
    * @param {string} modelName - 模型名称
+   * @param {boolean} enableThinking - 是否启用思考模式
    * @returns {Array} Gemini contents 数组
    */
-  convertMessages(messages, modelName) {
+  convertMessages(messages, modelName, enableThinking = false) {
     if (!Array.isArray(messages)) return [];
 
     const contents = [];
@@ -98,7 +108,7 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
         const parts = this.convertContent(message.content);
         contents.push({ role: 'user', parts });
       } else if (message.role === 'assistant') {
-        const parts = this.buildAssistantParts(message);
+        const parts = this.buildAssistantParts(message, modelName, enableThinking);
         contents.push({ role: 'model', parts });
       } else if (message.role === 'tool') {
         const parts = this.buildToolResultParts(message, contents);
@@ -166,10 +176,13 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
    * 注意：会尝试附加 thoughtSignature
    *
    * @param {object} message - OpenAI assistant 消息
+   * @param {string} modelName - 模型名称
+   * @param {boolean} enableThinking - 是否启用思考模式
    * @returns {Array} Gemini parts 数组
    */
-  buildAssistantParts(message) {
+  buildAssistantParts(message, modelName = '', enableThinking = false) {
     const parts = [];
+    const forceThoughtSignature = this.shouldForceThoughtSignature(modelName, enableThinking);
 
     // 处理内容数组 (支持 text 和 thinking)
     if (message.content) {
@@ -208,6 +221,9 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
                 }
               }
               // 如果没有签名，包装在标签中以保留内容（降级处理）
+              if (!thinkingPart.thoughtSignature && forceThoughtSignature) {
+                thinkingPart.thoughtSignature = THOUGHT_SIGNATURE_SKIP;
+              }
               if (!thinkingPart.thoughtSignature) {
                 // 移除 thought:true，因为没有签名时 Gemini 不接受 thought part
                 delete thinkingPart.thought;
@@ -221,7 +237,8 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
     }
 
     // 处理工具调用
-    if (message.tool_calls && message.tool_calls.length > 0) {
+    const hasToolCalls = Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
+    if (hasToolCalls) {
       for (const toolCall of message.tool_calls) {
         const args = safeJsonParse(toolCall.function?.arguments);
 
@@ -237,6 +254,8 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
         const signature = getThoughtSignature(toolCall.id);
         if (signature) {
           part.thoughtSignature = signature;
+        } else if (forceThoughtSignature) {
+          part.thoughtSignature = THOUGHT_SIGNATURE_SKIP;
         }
 
         parts.push(part);
@@ -296,6 +315,52 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
     }
 
     return parts;
+  }
+
+  resolveThinkingEnabled(parameters = {}, modelName = '') {
+    const reasoning = parameters?.reasoning;
+    if (reasoning && typeof reasoning === 'object' && reasoning.enabled === false) {
+      return false;
+    }
+    const effort = reasoning && typeof reasoning === 'object' ? reasoning.effort : null;
+    if (effort || parameters?.reasoning_effort) {
+      return true;
+    }
+    if (reasoning && typeof reasoning === 'object' && reasoning.enabled === true) {
+      return true;
+    }
+    return typeof modelName === 'string' && modelName.includes('thinking');
+  }
+
+  shouldForceThoughtSignature(modelName, enableThinking) {
+    if (!enableThinking) return false;
+    return typeof modelName === 'string' && modelName.includes('claude');
+  }
+
+  ensureThinkingPrefixForToolCalls(contents, modelName, enableThinking) {
+    if (!this.shouldForceThoughtSignature(modelName, enableThinking)) {
+      return;
+    }
+    if (!Array.isArray(contents)) return;
+
+    for (const content of contents) {
+      if (!content || content.role !== 'model' || !Array.isArray(content.parts)) {
+        continue;
+      }
+      const hasToolCalls = content.parts.some(part => part && part.functionCall);
+      if (!hasToolCalls) continue;
+
+      const firstPart = content.parts[0];
+      if (firstPart && firstPart.thought === true) {
+        continue;
+      }
+
+      content.parts.unshift({
+        thought: true,
+        text: '',
+        thoughtSignature: THOUGHT_SIGNATURE_SKIP
+      });
+    }
   }
 
   /**
