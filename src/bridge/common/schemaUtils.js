@@ -162,6 +162,8 @@ export function cleanJsonSchema(schema) {
     return schema;
   }
 
+  cleaned = normalizeSchemaShape(cleaned);
+
   // Phase 1: 转换和添加提示
   cleaned = convertConstToEnum(cleaned);
   cleaned = processSchema(cleaned);
@@ -240,7 +242,8 @@ function processSchema(obj, path = '') {
     return obj.map((item, i) => processSchema(item, `${path}[${i}]`));
   }
 
-  const normalized = wrapImplicitProperties(obj, path);
+  const normalizedPath = normalizePath(path);
+  const normalized = wrapImplicitProperties(obj, normalizedPath);
   if (normalized !== obj) {
     return processSchema(normalized, path);
   }
@@ -251,18 +254,23 @@ function processSchema(obj, path = '') {
   // 判断当前对象是否是 Schema 定义（有 type 字段）
   // 只有在 Schema 定义中，VALIDATION_FIELDS 才是约束关键字
   // 在 properties 容器对象中，这些可能是属性名
-  const isSchemaDefinition = 'type' in obj;
+  const isPropertiesContainer = isPropertiesContainerPath(normalizedPath);
+  const isSchemaDefinition = !isPropertiesContainer && hasSchemaMarkers(obj);
 
   for (const [key, value] of Object.entries(obj)) {
     // 只有在 Schema 定义中才收集验证约束作为提示
     // 避免将 properties 中名为 pattern/format 的属性误判为约束
     if (isSchemaDefinition && VALIDATION_FIELDS.has(key)) {
-      hints.push(`${key}: ${JSON.stringify(value)}`);
-      continue; // 不保留原字段
+      if (value !== null && typeof value === 'object') {
+        // 约束字段出现为对象时，保留原结构避免误判
+      } else {
+        hints.push(`${key}: ${JSON.stringify(value)}`);
+        continue; // 不保留原字段
+      }
     }
 
     // additionalProperties: false → 添加提示
-    if (key === 'additionalProperties') {
+    if (key === 'additionalProperties' && isSchemaDefinition) {
       if (value === false) {
         hints.push('No extra properties allowed');
       }
@@ -278,7 +286,7 @@ function processSchema(obj, path = '') {
     }
 
     // 需要完全移除的字段
-    if (FIELDS_TO_REMOVE.has(key)) {
+    if (!isPropertiesContainer && FIELDS_TO_REMOVE.has(key)) {
       continue;
     }
 
@@ -307,6 +315,127 @@ function processSchema(obj, path = '') {
   return result;
 }
 
+function normalizeSchemaShape(schema) {
+  if (!schema || typeof schema !== 'object') return schema;
+
+  if (Array.isArray(schema)) {
+    return schema.map(item => normalizeSchemaShape(item));
+  }
+
+  const result = { ...schema };
+
+  const normalizedProperties = normalizePropertiesContainer(result.properties);
+  if (normalizedProperties) {
+    result.properties = normalizedProperties;
+  }
+
+  if (Array.isArray(result.required)) {
+    const requiredNames = [];
+    for (const entry of result.required) {
+      if (typeof entry === 'string') {
+        requiredNames.push(entry);
+        continue;
+      }
+      if (entry && typeof entry === 'object') {
+        const name = entry.key ?? entry.name ?? entry.property ?? entry.prop ?? entry.id ?? null;
+        if (name) {
+          requiredNames.push(name);
+        }
+      }
+    }
+    if (requiredNames.length > 0) {
+      result.required = Array.from(new Set(requiredNames));
+    }
+  }
+
+  for (const [key, value] of Object.entries(result)) {
+    if (key === 'properties') continue;
+    if (value && typeof value === 'object') {
+      result[key] = normalizeSchemaShape(value);
+    }
+  }
+
+  return result;
+}
+
+function normalizePropertiesContainer(properties) {
+  if (!properties || typeof properties !== 'object') return null;
+
+  if (Array.isArray(properties)) {
+    const normalizedProps = {};
+    properties.forEach((item) => {
+      if (!item || typeof item !== 'object') return;
+      const propName = item.key ?? item.name ?? item.property ?? item.prop ?? item.id ?? null;
+      const propSchema = item.value ?? item.schema ?? item.definition ?? item.params ?? item.schemaDef ?? null;
+
+      if (!propName || !propSchema || typeof propSchema !== 'object') {
+        return;
+      }
+
+      normalizedProps[propName] = unwrapPropertySchema(
+        propName,
+        normalizeSchemaShape(propSchema)
+      );
+    });
+
+    return Object.keys(normalizedProps).length > 0 ? normalizedProps : null;
+  }
+
+  if (typeof properties === 'object') {
+    const entries = Object.entries(properties);
+    const numericEntries = entries.length > 0 && entries.every(([key]) => String(Number(key)) === key);
+    if (numericEntries) {
+      const normalizedProps = {};
+      for (const [, item] of entries) {
+        if (!item || typeof item !== 'object') continue;
+        const propName = item.key ?? item.name ?? item.property ?? item.prop ?? item.id ?? null;
+        const propSchema = item.value ?? item.schema ?? item.definition ?? item.params ?? item.schemaDef ?? null;
+        if (!propName || !propSchema || typeof propSchema !== 'object') {
+          continue;
+        }
+        normalizedProps[propName] = unwrapPropertySchema(
+          propName,
+          normalizeSchemaShape(propSchema)
+        );
+      }
+      if (Object.keys(normalizedProps).length > 0) {
+        return normalizedProps;
+      }
+    }
+
+    const processed = {};
+    for (const [key, value] of entries) {
+      processed[key] = unwrapPropertySchema(
+        key,
+        normalizeSchemaShape(value)
+      );
+    }
+    return processed;
+  }
+
+  return null;
+}
+
+function unwrapPropertySchema(propName, schema) {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+    return schema;
+  }
+
+  if ((schema.key === propName || schema.name === propName) && schema.value) {
+    return normalizeSchemaShape(schema.value);
+  }
+
+  const keys = Object.keys(schema);
+  if (keys.length === 1 && keys[0] === propName) {
+    const inner = schema[propName];
+    if (inner && typeof inner === 'object' && looksLikeSchemaNode(inner)) {
+      return normalizeSchemaShape(inner);
+    }
+  }
+
+  return schema;
+}
+
 function wrapImplicitProperties(obj, path) {
   if (isPropertiesContainerPath(path)) return obj;
   if (!shouldWrapImplicitProperties(obj)) return obj;
@@ -318,7 +447,12 @@ function wrapImplicitProperties(obj, path) {
 
 function isPropertiesContainerPath(path) {
   if (!path) return false;
-  return path.endsWith('.properties');
+  return path === 'properties' || path.endsWith('.properties');
+}
+
+function normalizePath(path) {
+  if (!path) return '';
+  return path.startsWith('.') ? path.slice(1) : path;
 }
 
 function shouldWrapImplicitProperties(obj) {
@@ -593,21 +727,23 @@ function flattenTypeArrays(obj) {
  * @param {object} obj - Schema 对象
  * @returns {object} 清理后的对象
  */
-function removeUnsupportedKeywords(obj) {
+function removeUnsupportedKeywords(obj, path = '') {
   if (!obj || typeof obj !== 'object') return obj;
 
   if (Array.isArray(obj)) {
-    return obj.map(item => removeUnsupportedKeywords(item));
+    return obj.map((item, i) => removeUnsupportedKeywords(item, `${path}[${i}]`));
   }
 
+  const normalizedPath = normalizePath(path);
+  const isPropertiesContainer = isPropertiesContainerPath(normalizedPath);
   const result = {};
 
   for (const [key, value] of Object.entries(obj)) {
-    if (FIELDS_TO_REMOVE.has(key)) {
+    if (!isPropertiesContainer && FIELDS_TO_REMOVE.has(key)) {
       continue; // 跳过不支持的字段
     }
     if (typeof value === 'object') {
-      result[key] = removeUnsupportedKeywords(value);
+      result[key] = removeUnsupportedKeywords(value, `${path}.${key}`);
     } else {
       result[key] = value;
     }
