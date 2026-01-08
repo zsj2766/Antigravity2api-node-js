@@ -8,8 +8,11 @@
     "start": "node src/server/index.js",
     "login": "node scripts/oauth-server.js",
     "refresh": "node scripts/refresh-tokens.js",
-    "dev": "node --watch src/server/index.js",
-    "test": "node --test test/"
+    "dev": "node --watch-path=src src/server/index.js",
+    "test": "node --test test/",
+    "test:unit": "node --test test/converters/",
+    "test:e2e": "node --test test/e2e/",
+    "test:csv": "node test/e2e/csv-test-runner.js"
   },
   "keywords": [
     "antigravity",

@@ -45,21 +45,25 @@ export { IResponseConverter } from './interfaces/IResponseConverter.js';
  * Bridge 工厂类
  */
 export class Bridge {
-  // 请求转换器缓存
-  static requestConverters = {
-    'openai->gemini': null,
-    'claude->gemini': null,
-    'openai->claude': null,
-    'claude->openai': null
+  // 请求转换器注册表
+  static requestConverterClasses = {
+    'openai->gemini': OpenAIToGeminiRequestConverter,
+    'claude->gemini': ClaudeToGeminiRequestConverter,
+    'openai->claude': OpenAIToClaudeRequestConverter,
+    'claude->openai': ClaudeToOpenAIRequestConverter
   };
 
-  // 响应转换器缓存
-  static responseConverters = {
-    'gemini->openai': null,
-    'gemini->claude': null,
-    'claude->openai': null,
-    'openai->claude': null
+  // 响应转换器注册表
+  static responseConverterClasses = {
+    'gemini->openai': GeminiToOpenAIResponseConverter,
+    'gemini->claude': GeminiToClaudeResponseConverter,
+    'claude->openai': ClaudeToOpenAIResponseConverter,
+    'openai->claude': OpenAIToClaudeResponseConverter
   };
+
+  // 转换器缓存
+  static requestConverters = {};
+  static responseConverters = {};
 
   /**
    * 获取请求转换器
@@ -69,24 +73,14 @@ export class Bridge {
    */
   static getRequestConverter(clientProtocol, upstreamProtocol) {
     const key = `${clientProtocol}->${upstreamProtocol}`;
+    const Converter = this.requestConverterClasses[key];
+
+    if (!Converter) {
+      throw new Error(`Unsupported request conversion: ${key}`);
+    }
 
     if (!this.requestConverters[key]) {
-      switch (key) {
-        case 'openai->gemini':
-          this.requestConverters[key] = new OpenAIToGeminiRequestConverter();
-          break;
-        case 'claude->gemini':
-          this.requestConverters[key] = new ClaudeToGeminiRequestConverter();
-          break;
-        case 'openai->claude':
-          this.requestConverters[key] = new OpenAIToClaudeRequestConverter();
-          break;
-        case 'claude->openai':
-          this.requestConverters[key] = new ClaudeToOpenAIRequestConverter();
-          break;
-        default:
-          throw new Error(`Unsupported request conversion: ${key}`);
-      }
+      this.requestConverters[key] = new Converter();
     }
 
     return this.requestConverters[key];
@@ -100,24 +94,14 @@ export class Bridge {
    */
   static getResponseConverter(upstreamProtocol, clientProtocol) {
     const key = `${upstreamProtocol}->${clientProtocol}`;
+    const Converter = this.responseConverterClasses[key];
+
+    if (!Converter) {
+      throw new Error(`Unsupported response conversion: ${key}`);
+    }
 
     if (!this.responseConverters[key]) {
-      switch (key) {
-        case 'gemini->openai':
-          this.responseConverters[key] = new GeminiToOpenAIResponseConverter();
-          break;
-        case 'gemini->claude':
-          this.responseConverters[key] = new GeminiToClaudeResponseConverter();
-          break;
-        case 'claude->openai':
-          this.responseConverters[key] = new ClaudeToOpenAIResponseConverter();
-          break;
-        case 'openai->claude':
-          this.responseConverters[key] = new OpenAIToClaudeResponseConverter();
-          break;
-        default:
-          throw new Error(`Unsupported response conversion: ${key}`);
-      }
+      this.responseConverters[key] = new Converter();
     }
 
     return this.responseConverters[key];
@@ -176,18 +160,8 @@ export class Bridge {
    */
   static listSupportedConversions() {
     return {
-      request: [
-        'openai->gemini',
-        'claude->gemini',
-        'openai->claude',
-        'claude->openai'
-      ],
-      response: [
-        'gemini->openai',
-        'gemini->claude',
-        'claude->openai',
-        'openai->claude'
-      ]
+      request: Object.keys(this.requestConverterClasses),
+      response: Object.keys(this.responseConverterClasses)
     };
   }
 }

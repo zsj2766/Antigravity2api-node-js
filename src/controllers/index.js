@@ -52,7 +52,7 @@ export {
   getTokenStats
 } from './adminController.js';
 
-// 聊天控制器
+// 控制器工具函数
 export {
   attachImageUrlsToGeminiResponse,
   getModels,
@@ -60,8 +60,9 @@ export {
   IMAGE_SIZE_MAP,
   parseModelAlias,
   isImageModel,
-  createLogWriter
-} from './chatController.js';
+  createLogWriter,
+  extractErrorStatus
+} from './controllerUtils.js';
 
 // Gemini 控制器
 export {
@@ -69,13 +70,21 @@ export {
   handleGeminiStreamGenerateContent
 } from './geminiController.js';
 
-// v1 API 控制器
+// OpenAI 兼容 API 控制器
 export {
-  createChatCompletionHandler,
-  handleImageGeneration,
+  createChatCompletionHandler
+} from './openaiController.js';
+
+// 图像生成控制器
+export {
+  handleImageGeneration
+} from './imageController.js';
+
+// Claude 兼容 API 控制器
+export {
   handleCountTokens,
   handleClaudeMessages
-} from './v1Controller.js';
+} from './claudeController.js';
 
 // 注意: httpUtils 函数应直接从 '../utils/httpUtils.js' 导入
 // 不在此处重导出，避免不必要的间接层

@@ -1,18 +1,15 @@
 /**
- * 聊天控制器 (Chat Controller)
+ * 控制器工具函数 (Controller Utilities)
  *
  * 职责：
- * - 提供聊天相关的工具函数和元数据
+ * - 提供控制器共享的工具函数
  * - 模型列表查询
  * - 凭证使用量统计
  * - Gemini 响应图片处理
  * - 模型别名解析
+ * - 日志写入工具
  *
- * 注意：
- * - 核心处理器逻辑已迁移到 routes/v1/index.js
- * - 此模块仅保留工具函数和元数据
- *
- * @module controllers/chatController
+ * @module controllers/controllerUtils
  */
 
 import logger from '../utils/logger.js';
@@ -178,6 +175,18 @@ export function isImageModel(model) {
 }
 
 /**
+ * 提取错误状态码
+ *
+ * @param {any} error - 错误对象
+ * @param {number} [defaultStatus=500] - 默认状态码
+ * @returns {number}
+ */
+export function extractErrorStatus(error, defaultStatus = 500) {
+  const rawStatus = error?.status || error?.statusCode || error?.response?.status || defaultStatus;
+  return parseInt(String(rawStatus), 10);
+}
+
+/**
  * 创建日志写入函数
  *
  * 生成一个绑定了请求上下文的日志写入函数。
@@ -278,5 +287,6 @@ export default {
   IMAGE_SIZE_MAP,
   parseModelAlias,
   isImageModel,
-  createLogWriter
+  createLogWriter,
+  extractErrorStatus
 };

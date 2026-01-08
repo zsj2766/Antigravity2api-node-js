@@ -12,7 +12,7 @@
 import tokenManager from '../auth/token_manager.js';
 import { generateRequestBodyFromGemini } from '../utils/utils.js';
 import {
-  generateAssistantResponse,
+  generateAssistantResponseStream,
   generateGeminiResponseNoStream
 } from '../api/client.js';
 import {
@@ -22,8 +22,10 @@ import {
 import {
   attachImageUrlsToGeminiResponse,
   parseModelAlias,
-  createLogWriter
-} from './chatController.js';
+  createLogWriter,
+  extractErrorStatus
+} from './controllerUtils.js';
+import { withRetry } from '../utils/withRetry.js';
 
 /**
  * 应用图片尺寸配置到请求体
@@ -63,41 +65,71 @@ export async function handleGeminiGenerateContent(req, res) {
     req, res, startedAt, requestSnapshot, model
   });
 
-  try {
-    const body = req.body || {};
+  const body = req.body || {};
+  applyImageSizeToBody(body, imageSizeFromModel);
 
-    applyImageSizeToBody(body, imageSizeFromModel);
-
-    if (!Array.isArray(body.contents) || body.contents.length === 0) {
-      const status = 400;
-      const message = 'contents is required for Gemini generateContent';
-      res.status(status).json({ error: message });
-      writeLog({ success: false, status, message });
-      return;
-    }
-
-    const token = await tokenManager.getToken();
-    if (!token) {
-      const status = 503;
-      const message = '没有可用的 token，请先通过 OAuth 面板或 npm run login 获取。';
-      res.status(status).json({ error: message });
-      writeLog({ success: false, status, message });
-      return;
-    }
-
-    setToken(token);
-
-    const requestBody = generateRequestBodyFromGemini(body, upstreamModel, token);
-    const geminiResponse = await generateGeminiResponseNoStream(requestBody, token);
-    const responseWithUrls = attachImageUrlsToGeminiResponse(geminiResponse);
-
-    res.json(responseWithUrls);
-    writeLog({ success: true, status: res.statusCode || 200, responseBody: responseWithUrls });
-  } catch (error) {
-    const status = 500;
-    const message = error?.message || 'Gemini generateContent 调用失败';
+  if (!Array.isArray(body.contents) || body.contents.length === 0) {
+    const status = 400;
+    const message = 'contents is required for Gemini generateContent';
     res.status(status).json({ error: message });
     writeLog({ success: false, status, message });
+    return;
+  }
+
+  let retryCountForLog = 0;
+
+  try {
+    const { result, retryCount } = await withRetry({
+      resolveToken: (req, excludeIds) => tokenManager.getToken(excludeIds),
+      req,
+      res,
+      onTokenChange: setToken,
+      onRetry: (attempt, error, willRetry, delay) => {
+        const errorStatusInt = extractErrorStatus(error);
+        writeLog({
+          success: false,
+          status: errorStatusInt,
+          message: delay ? `429 限流，等待 ${Math.round(delay)}ms 后重试当前凭证` : error.message,
+          isRetry: retryCountForLog > 0,
+          retryCount: retryCountForLog,
+          willRetry
+        });
+        retryCountForLog++;
+      },
+      execute: async (token) => {
+        const requestBody = generateRequestBodyFromGemini(body, upstreamModel, token);
+        const geminiResponse = await generateGeminiResponseNoStream(requestBody, token);
+        const responseWithUrls = attachImageUrlsToGeminiResponse(geminiResponse);
+
+        res.json(responseWithUrls);
+        return responseWithUrls;
+      }
+    });
+
+    writeLog({
+      success: true,
+      status: res.statusCode || 200,
+      isRetry: retryCount > 0,
+      retryCount,
+      responseBody: result
+    });
+
+  } catch (error) {
+    const status = extractErrorStatus(error);
+    const message = error?.message || 'Gemini generateContent 调用失败';
+    const retryCount = error.retryCount || retryCountForLog;
+
+    writeLog({
+      success: false,
+      status,
+      message,
+      isRetry: retryCount > 0,
+      retryCount
+    });
+
+    if (!res.headersSent) {
+      res.status(status).json({ error: message });
+    }
   }
 }
 
@@ -118,87 +150,88 @@ export async function handleGeminiStreamGenerateContent(req, res) {
     req, res, startedAt, requestSnapshot, model
   });
 
+  const body = req.body || {};
+
+  if (!Array.isArray(body.contents) || body.contents.length === 0) {
+    const status = 400;
+    const message = 'contents is required for Gemini streamGenerateContent';
+    res.status(status).json({ error: message });
+    writeLog({ success: false, status, message });
+    return;
+  }
+
+  applyImageSizeToBody(body, imageSizeFromModel);
+
+  let retryCountForLog = 0;
   const streamEventsForLog = [];
 
   try {
-    const body = req.body || {};
-
-    if (!Array.isArray(body.contents) || body.contents.length === 0) {
-      const status = 400;
-      const message = 'contents is required for Gemini streamGenerateContent';
-      res.status(status).json({ error: message });
-      writeLog({ success: false, status, message });
-      return;
-    }
-
-    applyImageSizeToBody(body, imageSizeFromModel);
-
-    const token = await tokenManager.getToken();
-    if (!token) {
-      const status = 503;
-      const message = '没有可用的 token，请先通过 OAuth 面板或 npm run login 获取。';
-      res.status(status).json({ error: message });
-      writeLog({ success: false, status, message });
-      return;
-    }
-
-    setToken(token);
-
-    const requestBody = generateRequestBodyFromGemini(body, upstreamModel, token);
-
-    setStreamHeaders(res);
-    res.flushHeaders();
-
-    const sendSse = payload => {
-      res.write(`data: ${JSON.stringify(payload)}\n\n`);
-    };
-
-    const { usage } = await generateAssistantResponse(requestBody, token, data => {
-      streamEventsForLog.push(data);
-      if (data.type === 'thinking') {
-        sendSse({ candidates: [{ content: { parts: [{ text: data.content, thought: true }] } }] });
-      } else if (data.type === 'text') {
-        sendSse({ candidates: [{ content: { parts: [{ text: data.content }] } }] });
-      } else if (data.type === 'image') {
-        sendSse({
-          candidates: [
-            {
-              content: {
-                parts: [
-                  {
-                    inlineData: {
-                      mimeType: data.mimeType || 'image/png',
-                      url: data.url,
-                      data: data.data
-                    }
-                  }
-                ]
-              }
-            }
-          ]
+    const { result, retryCount } = await withRetry({
+      resolveToken: (req, excludeIds) => tokenManager.getToken(excludeIds),
+      req,
+      res,
+      onTokenChange: setToken,
+      onRetry: (attempt, error, willRetry, delay) => {
+        const errorStatusInt = extractErrorStatus(error);
+        writeLog({
+          success: false,
+          status: errorStatusInt,
+          message: delay ? `429 限流，等待 ${Math.round(delay)}ms 后重试当前凭证` : error.message,
+          isRetry: retryCountForLog > 0,
+          retryCount: retryCountForLog,
+          willRetry
         });
-      }
-      // tool_calls 在 Gemini 流式中暂不下发
-    });
+        retryCountForLog++;
+      },
+      execute: async (token) => {
+        const requestBody = generateRequestBodyFromGemini(body, upstreamModel, token);
 
-    sendSse({ done: true, usage: usage || null });
-    res.end();
+        setStreamHeaders(res);
+        res.flushHeaders();
+
+        let usage = null;
+
+        // 直接透传原始 Gemini chunk（Gemini → Gemini 无需格式转换）
+        for await (const { chunk, usage: u } of generateAssistantResponseStream(requestBody, token)) {
+          streamEventsForLog.push(chunk);
+          if (u) usage = u;
+          res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+        }
+
+        res.write(`data: ${JSON.stringify({ done: true, usage: usage || null })}\n\n`);
+        res.end();
+
+        return { stream: true, events: streamEventsForLog, usage };
+      }
+    });
 
     writeLog({
       success: true,
       status: 200,
-      responseBody: { stream: true, events: streamEventsForLog, usage }
+      isRetry: retryCount > 0,
+      retryCount,
+      responseBody: result
     });
+
   } catch (error) {
-    const status = 500;
+    const status = extractErrorStatus(error);
     const message = error?.message || 'Gemini streamGenerateContent 调用失败';
+    const retryCount = error.retryCount || retryCountForLog;
+
+    writeLog({
+      success: false,
+      status,
+      message,
+      isRetry: retryCount > 0,
+      retryCount
+    });
+
     if (!res.headersSent) {
       res.status(status).json({ error: message });
     } else {
       res.write(`data: ${JSON.stringify({ error: message })}\n\n`);
       res.end();
     }
-    writeLog({ success: false, status, message });
   }
 }
 

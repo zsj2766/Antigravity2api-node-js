@@ -11,7 +11,7 @@
 
 import config from '../config/config.js';
 import { generateRequestId } from './idGenerator.js';
-import { TTLCache } from './converters/common/ttlCache.js';
+import { TTLCache } from './ttlCache.js';
 import os from 'os';
 
 // ==================== 思维签名缓存 ====================
@@ -177,9 +177,9 @@ function isClaudeModel(modelName) {
 function isThinkingModel(modelName) {
   if (typeof modelName !== 'string') return false;
   return (
-    modelName.endsWith('-thinking') ||
-    modelName === 'gemini-2.5-pro' ||
-    modelName.startsWith('gemini-3-pro-')
+    modelName.includes('-thinking') ||
+    modelName.startsWith('gemini-2.5-pro') ||
+    modelName.startsWith('gemini-3-pro')
   );
 }
 

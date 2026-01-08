@@ -6,15 +6,120 @@ import config from '../config/config.js';
 import { log } from '../utils/logger.js';
 import { generateRequestId } from '../utils/idGenerator.js';
 import AntigravityRequester from '../AntigravityRequester.js';
-import { registerTextThoughtSignature } from '../utils/utils.js';
-import {
-  parseGeminiStreamToOpenAI,
-  toOpenAiUsage,
-  convertToToolCallWithSignature,
-  flushTextAccumulator,
-  mapGeminiStopReason
-} from '../utils/converters/index.js';
+import { registerTextThoughtSignature, registerThoughtSignature } from '../utils/utils.js';
+import { GeminiToOpenAIResponseConverter } from '../bridge/res/GeminiToOpenAIResponseConverter.js';
+import { GeminiToClaudeResponseConverter } from '../bridge/res/GeminiToClaudeResponseConverter.js';
+import { CallbackProtocolEmitter } from '../bridge/common/CallbackProtocolEmitter.js';
+import { mapGeminiStopReason, generateToolCallId } from '../bridge/common/index.js';
 import { saveBase64Image } from '../utils/imageStorage.js';
+
+// 创建转换器实例
+const geminiToOpenAIConverter = new GeminiToOpenAIResponseConverter();
+const geminiToClaudeConverter = new GeminiToClaudeResponseConverter();
+
+/**
+ * 转换 Gemini usage 到 OpenAI 格式
+ */
+function toOpenAiUsage(usageMetadata) {
+  return geminiToOpenAIConverter.convertUsage(usageMetadata);
+}
+
+/**
+ * 转换工具调用并附加签名
+ */
+function convertToToolCallWithSignature(functionCall, thoughtSignature) {
+  const id = functionCall.id || generateToolCallId();
+  if (thoughtSignature) {
+    registerThoughtSignature(id, thoughtSignature);
+  }
+  return {
+    id,
+    type: 'function',
+    function: {
+      name: functionCall.name,
+      arguments: JSON.stringify(functionCall.args || {})
+    }
+  };
+}
+
+/**
+ * 解析 Gemini 流式响应到 OpenAI 格式
+ * 处理 SSE 格式的行，解析 JSON 并调用回调
+ * @param {string} line - SSE 行
+ * @param {Object} state - 状态对象 { toolCalls, toolCallIndex, usage, textAccumulator, finishReason }
+ * @param {Function} callback - 回调函数，接收事件对象
+ */
+export function parseGeminiStreamToOpenAI(line, state, callback) {
+  // 跳过空行和非数据行
+  if (!line || !line.startsWith('data: ')) return;
+
+  const jsonStr = line.slice(6).trim();
+  if (!jsonStr || jsonStr === '[DONE]') return;
+
+  try {
+    const chunk = JSON.parse(jsonStr);
+    const candidate = chunk.candidates?.[0];
+    if (!candidate) return;
+
+    const parts = candidate.content?.parts || [];
+
+    for (const part of parts) {
+      if (!part) continue;
+
+      // 思考内容
+      if (part.thought === true) {
+        if (part.text) {
+          if (part.thoughtSignature) {
+            registerTextThoughtSignature(part.text, part.thoughtSignature);
+          }
+          callback({ type: 'thinking', content: part.text, signature: part.thoughtSignature || null });
+        } else if (part.thoughtSignature) {
+          // 单独的 signature chunk（没有 text）
+          callback({ type: 'thinking', content: null, signature: part.thoughtSignature });
+        }
+        continue;
+      }
+
+      // 普通文本
+      if (part.text !== undefined) {
+        if (part.thoughtSignature) {
+          registerTextThoughtSignature(part.text, part.thoughtSignature);
+        }
+        callback({ type: 'text', content: part.text });
+      }
+
+      // 工具调用
+      if (part.functionCall) {
+        const toolCall = convertToToolCallWithSignature(part.functionCall, part.thoughtSignature);
+        state.toolCalls.push(toolCall);
+        callback({ type: 'tool_call_chunk', tool_call: toolCall });
+      }
+
+      // 图片数据
+      if (part.inlineData) {
+        const imageUrl = saveBase64Image(part.inlineData.data, part.inlineData.mimeType);
+        callback({ type: 'image', url: imageUrl });
+      }
+
+      // 文件数据
+      if (part.fileData) {
+        callback({ type: 'file', url: part.fileData.fileUri, mimeType: part.fileData.mimeType });
+      }
+    }
+
+    // 处理 usage
+    if (chunk.usageMetadata) {
+      state.usage = toOpenAiUsage(chunk.usageMetadata);
+    }
+
+    // 处理 finish reason - 返回原始 Gemini finishReason，由调用方根据目标格式映射
+    if (candidate.finishReason) {
+      callback({ type: 'finish_reason', finishReason: candidate.finishReason });
+    }
+  } catch (e) {
+    // 解析错误静默忽略
+  }
+}
 
 // HTTP Keep-Alive Agent 配置（复用 TCP 连接提升性能）
 const agentOptions = {
@@ -307,7 +412,17 @@ async function handleApiError(error, token) {
 
 // ==================== 导出函数 ====================
 
-export async function generateAssistantResponse(requestBody, token, callback) {
+/**
+ * 流式生成响应（回调模式）- 仅用于图片生成模型
+ *
+ * 图片生成需要特殊的聚合逻辑（收集所有图片 URL 后统一输出），
+ * 因此使用回调模式而非原始流模式。
+ *
+ * @param {Object} requestBody - 请求体
+ * @param {Object} token - 认证 token
+ * @param {Function} callback - 回调函数，接收解析后的事件对象 { type, content, ... }
+ */
+export async function generateImageModelResponse(requestBody, token, callback) {
 
     const state = { toolCalls: [], toolCallIndex: 0, usage: null, textAccumulator: { text: '', signature: null }, finishReason: null };
     let buffer = ''; // 缓冲区：处理跨 chunk 的不完整行
@@ -426,6 +541,222 @@ export async function generateAssistantResponse(requestBody, token, callback) {
     }
 
     return { usage: state.usage, finishReason: state.finishReason };
+}
+
+/**
+ * 流式生成响应 - 原始流模式
+ * 返回 AsyncIterable<GeminiChunk>，由调用方自行处理
+ *
+ * @param {Object} requestBody - 请求体
+ * @param {Object} token - 认证 token
+ * @returns {AsyncGenerator<{chunk: Object, usage: Object|null, finishReason: string|null}>}
+ */
+export async function* generateAssistantResponseStream(requestBody, token) {
+    let buffer = '';
+    let usage = null;
+    let finishReason = null;
+
+    const parseSSELine = (line) => {
+        if (!line || !line.startsWith('data: ')) return null;
+        const jsonStr = line.slice(6).trim();
+        if (!jsonStr || jsonStr === '[DONE]') return null;
+        try {
+            return JSON.parse(jsonStr);
+        } catch (e) {
+            return null;
+        }
+    };
+
+    // 创建一个队列来收集 chunks
+    const chunks = [];
+    let resolveNext = null;
+    let streamEnded = false;
+    let streamError = null;
+
+    const pushChunk = (chunk) => {
+        if (resolveNext) {
+            resolveNext({ value: chunk, done: false });
+            resolveNext = null;
+        } else {
+            chunks.push(chunk);
+        }
+    };
+
+    const endStream = (error = null) => {
+        streamEnded = true;
+        streamError = error;
+        if (resolveNext) {
+            if (error) {
+                resolveNext({ value: undefined, done: true, error });
+            } else {
+                resolveNext({ value: undefined, done: true });
+            }
+            resolveNext = null;
+        }
+    };
+
+    const processChunk = (text) => {
+        buffer += text;
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+            const parsed = parseSSELine(line);
+            if (!parsed) continue;
+
+            // Gemini 返回格式: { response: { candidates, usageMetadata } } 或直接 { candidates, usageMetadata }
+            // 统一解包为标准格式 { candidates, usageMetadata }
+            const normalized = parsed.response || parsed;
+
+            // 提取 usage 和 finishReason
+            if (normalized.usageMetadata) {
+                usage = toOpenAiUsage(normalized.usageMetadata);
+            }
+            const candidate = normalized.candidates?.[0];
+            if (candidate?.finishReason) {
+                finishReason = candidate.finishReason;
+            }
+
+            // 返回标准化后的 chunk，确保下游 processor 可以直接访问 candidates
+            pushChunk({ chunk: normalized, usage, finishReason });
+        }
+    };
+
+    // 启动流请求（异步）
+    const streamPromise = withRequesterFallback(async currentUseAxios => {
+        const headers = buildHeaders(token);
+        const attemptStartTime = Date.now();
+        const tokenId = token.projectId || token.access_token?.slice(-8);
+
+        log.backend({
+            type: 'request',
+            url: config.api.url,
+            method: 'POST',
+            headers,
+            body: requestBody,
+            tokenId
+        });
+
+        try {
+            if (currentUseAxios) {
+                const axiosConfig = { ...buildAxiosConfig(config.api.url, headers, requestBody), responseType: 'stream' };
+                const response = await axios(axiosConfig);
+
+                response.data.on('data', chunk => processChunk(chunk.toString()));
+                await new Promise((resolve, reject) => {
+                    response.data.on('end', () => {
+                        log.backend({
+                            type: 'response',
+                            status: 200,
+                            durationMs: Date.now() - attemptStartTime,
+                            tokenId
+                        });
+                        endStream();
+                        resolve();
+                    });
+                    response.data.on('error', (err) => {
+                        endStream(err);
+                        reject(err);
+                    });
+                });
+                return;
+            }
+
+            const streamResponse = requester.antigravity_fetchStream(config.api.url, buildRequesterConfig(headers, requestBody));
+            let errorBody = '';
+            let statusCode = null;
+
+            await new Promise((resolve, reject) => {
+                streamResponse
+                    .onStart(({ status }) => { statusCode = status; })
+                    .onData((chunk) => {
+                        if (statusCode !== 200) {
+                            errorBody += chunk;
+                        } else {
+                            processChunk(chunk);
+                        }
+                    })
+                    .onEnd(() => {
+                        if (statusCode !== 200) {
+                            log.backend({
+                                type: 'response',
+                                status: statusCode,
+                                durationMs: Date.now() - attemptStartTime,
+                                body: errorBody,
+                                tokenId
+                            });
+                            const err = { status: statusCode, message: errorBody };
+                            endStream(err);
+                            reject(err);
+                        } else {
+                            log.backend({
+                                type: 'response',
+                                status: 200,
+                                durationMs: Date.now() - attemptStartTime,
+                                tokenId
+                            });
+                            endStream();
+                            resolve();
+                        }
+                    })
+                    .onError((err) => {
+                        log.backend({
+                            type: 'response',
+                            status: 'Error',
+                            durationMs: Date.now() - attemptStartTime,
+                            body: err?.message || err,
+                            tokenId
+                        });
+                        endStream(err);
+                        reject(err);
+                    });
+            });
+        } catch (error) {
+            if (currentUseAxios) {
+                log.backend({
+                    type: 'response',
+                    status: error?.response?.status || 'Error',
+                    durationMs: Date.now() - attemptStartTime,
+                    body: error?.message || error,
+                    tokenId
+                });
+            }
+            throw error;
+        }
+    }).catch(async (error) => {
+        try {
+            await handleApiError(error, token);
+        } catch (e) {
+            endStream(e);
+        }
+    });
+
+    // 异步迭代器：等待 chunks 或流结束
+    while (true) {
+        if (chunks.length > 0) {
+            yield chunks.shift();
+        } else if (streamEnded) {
+            if (streamError) {
+                throw streamError;
+            }
+            break;
+        } else {
+            // 等待下一个 chunk
+            await new Promise(resolve => {
+                resolveNext = (result) => {
+                    if (result.done) {
+                        resolve();
+                    } else {
+                        chunks.push(result.value);
+                        resolve();
+                    }
+                };
+            });
+        }
+    }
+
+    // 等待流请求完成（处理可能的错误）
+    await streamPromise;
 }
 
 export async function getAvailableModels() {
@@ -580,15 +911,24 @@ export async function generateAssistantResponseNoStream(requestBody, token) {
     // 解析响应内容
     const candidate = data.response?.candidates?.[0];
     const parts = candidate?.content?.parts || [];
+
+    // 使用 Converter 保持原始顺序的 Claude 内容块
+    const contentBlocks = geminiToClaudeConverter.convertContent(parts);
     const usage = toOpenAiUsage(data.response?.usageMetadata);
     let content = '';
     let thinkingContent = '';
+    let thinkingSignature = null;
     const toolCalls = [];
-    const imageUrls = [];
+    const images = [];  // 独立的图片结构
+    const files = [];   // 独立的文件结构
 
     for (const part of parts) {
         if (part.thought === true) {
             thinkingContent += part.text || '';
+            // 保存最后一个 thinking 的 signature
+            if (part.thoughtSignature) {
+                thinkingSignature = part.thoughtSignature;
+            }
         } else if (part.text !== undefined) {
             if (part.thoughtSignature) {
                 registerTextThoughtSignature(part.text, part.thoughtSignature);
@@ -599,33 +939,43 @@ export async function generateAssistantResponseNoStream(requestBody, token) {
         } else if (part.functionCall) {
             toolCalls.push(convertToToolCallWithSignature(part.functionCall, part.thoughtSignature));
         } else if (part.inlineData) {
-            // 保存图片到本地并获取 URL
+            // 保存图片到本地并获取 URL，返回独立结构
             const imageUrl = saveBase64Image(part.inlineData.data, part.inlineData.mimeType);
-            imageUrls.push(imageUrl);
+            images.push({
+                url: imageUrl,
+                mimeType: part.inlineData.mimeType,
+                base64: part.inlineData.data
+            });
+        } else if (part.fileData) {
+            files.push({
+                url: part.fileData.fileUri,
+                mimeType: part.fileData.mimeType
+            });
         }
     }
 
-    // 拼接思维链标签（用于非图像模型的普通响应）
-    if (thinkingContent && imageUrls.length === 0) {
-        content = `<think>\n${thinkingContent}\n</think>\n${content}`;
-    }
+    // 注册聚合文本的签名
     if (aggregatedText && aggregatedTextSignature) {
         registerTextThoughtSignature(aggregatedText, aggregatedTextSignature);
     }
 
-    // 计算 finishReason（使用统一映射）
+    // 返回原始 Gemini finishReason，由调用方根据目标格式映射
     const rawFinishReason = candidate?.finishReason;
     const hasToolCalls = toolCalls.length > 0;
-    const finishReason = mapGeminiStopReason(rawFinishReason, hasToolCalls).openai;
 
-    // 生图模型：转换为 markdown 格式，并返回独立的 thinking 字段
-    if (imageUrls.length > 0) {
-        let markdown = content ? content + '\n\n' : '';
-        markdown += imageUrls.map(url => `![image](${url})`).join('\n\n');
-        return { content: markdown, toolCalls, thinking: thinkingContent || null, finishReason };
-    }
-
-    return { content, toolCalls, usage, finishReason };
+    // 返回统一结构，包含独立的 images 数组和原始 finishReason
+    return {
+        content,
+        toolCalls,
+        usage,
+        finishReason: rawFinishReason,  // 原始 Gemini finishReason
+        hasToolCalls,                    // 供调用方用于 stop_reason 映射
+        thinking: thinkingContent || null,
+        thinkingSignature,
+        images: images.length > 0 ? images : null,
+        files: files.length > 0 ? files : null,
+        contentBlocks  // 使用 Converter 保持原始顺序的 Claude 内容块
+    };
 }
 
 // 直接返回原始 Gemini 风格响应（用于 Gemini 兼容接口）

@@ -1,15 +1,25 @@
 /**
- * SSE 工具函数模块
+ * Claude 格式工具函数
  *
- * 提供 SSE 响应构建、Token 估算、Claude 格式消息处理等通用功能
- * 被 anthropicAdapter.js 和 claudeToOpenaiAdapter.js 共同使用
+ * Token 估算、内容块构建等通用功能
  */
 
-import { safeJsonParse } from '../utils.js';
-import { generateToolUseId } from '../idGenerator.js';
-import { estimateTokensFromText } from './tokenUtils.js';
+import { estimateTokens, generateToolUseId } from './idUtils.js';
 
-// ==================== Token 估算 ====================
+/**
+ * 安全解析 JSON
+ * @param {string|object} str - JSON 字符串或对象
+ * @param {*} fallback - 解析失败时的默认值
+ * @returns {*} - 解析结果
+ */
+function safeJsonParse(str, fallback = {}) {
+  if (typeof str !== 'string') return str ?? fallback;
+  try {
+    return JSON.parse(str);
+  } catch {
+    return fallback;
+  }
+}
 
 /**
  * 从 Claude 消息中提取文本内容
@@ -62,7 +72,7 @@ export function countClaudeTokens(request) {
     totalText += `\n${JSON.stringify(request.tools)}`;
   }
 
-  const inputTokens = estimateTokensFromText(totalText);
+  const inputTokens = estimateTokens(totalText);
 
   return {
     input_tokens: inputTokens,
@@ -70,8 +80,6 @@ export function countClaudeTokens(request) {
     tokens: inputTokens
   };
 }
-
-// ==================== 工具调用转换 ====================
 
 /**
  * 将 OpenAI 工具调用转换为 Claude 格式块
@@ -105,43 +113,4 @@ export function buildClaudeContentBlocks(content, toolCalls = []) {
     blocks.push(...convertToolCallsToClaudeBlocks(toolCalls));
   }
   return blocks;
-}
-
-// ==================== SSE 响应构建 ====================
-
-/**
- * 构建 Claude message_start 事件的 payload
- * @param {string} requestId - 请求 ID
- * @param {string} model - 模型名称
- * @param {number} inputTokens - 输入 token 数量
- * @returns {object} - message_start payload
- */
-export function buildMessageStartPayload(requestId, model, inputTokens = 0) {
-  return {
-    type: 'message_start',
-    message: {
-      id: `msg_${requestId}`,
-      type: 'message',
-      role: 'assistant',
-      model: model || 'claude-proxy',
-      stop_sequence: null,
-      usage: {
-        input_tokens: inputTokens || 0,
-        output_tokens: 0
-      },
-      content: [],
-      stop_reason: null
-    }
-  };
-}
-
-/**
- * 写入 Claude 格式的 SSE 事件
- * @param {object} res - HTTP 响应对象
- * @param {string} event - 事件类型
- * @param {object} data - 事件数据
- */
-export function writeSSE(res, event, data) {
-  res.write(`event: ${event}\n`);
-  res.write(`data: ${JSON.stringify(data)}\n\n`);
 }

@@ -17,13 +17,13 @@ import tokenManager from '../../auth/token_manager.js';
 import {
   getModels,
   getCredentialLimits
-} from '../../controllers/chatController.js';
+} from '../../controllers/controllerUtils.js';
+import { createChatCompletionHandler } from '../../controllers/openaiController.js';
+import { handleImageGeneration } from '../../controllers/imageController.js';
 import {
-  createChatCompletionHandler,
-  handleImageGeneration,
   handleCountTokens,
   handleClaudeMessages
-} from '../../controllers/v1Controller.js';
+} from '../../controllers/claudeController.js';
 
 const router = Router();
 

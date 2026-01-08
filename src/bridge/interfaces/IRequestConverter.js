@@ -17,6 +17,25 @@ export class IRequestConverter {
   }
 
   /**
+   * 转换消息数组
+   * @param {Array} messages - 源格式消息数组
+   * @param {string} modelName - 模型名称（可选）
+   * @returns {Array} - 目标格式消息数组
+   */
+  convertMessages(messages, modelName) {
+    throw new Error('convertMessages() must be implemented by subclass');
+  }
+
+  /**
+   * 转换内容块（路由到具体类型转换器）
+   * @param {string|Array} content - 源格式内容
+   * @returns {Array|object} - 目标格式内容
+   */
+  convertContent(content) {
+    throw new Error('convertContent() must be implemented by subclass');
+  }
+
+  /**
    * 转换文本内容
    * @param {string|object} content - 文本内容
    * @returns {object} - 目标格式文本
@@ -46,7 +65,7 @@ export class IRequestConverter {
   /**
    * 转换音频内容（预留）
    * @param {object} content - 音频内容
-   * @returns {object} - 目标格式音频
+   * @returns {object|null} - 目标格式音频
    */
   convertAudio(content) {
     // 预留接口，默认返回空
@@ -56,7 +75,7 @@ export class IRequestConverter {
   /**
    * 转换视频内容（预留）
    * @param {object} content - 视频内容
-   * @returns {object} - 目标格式视频
+   * @returns {object|null} - 目标格式视频
    */
   convertVideo(content) {
     // 预留接口，默认返回空
@@ -80,6 +99,15 @@ export class IRequestConverter {
    */
   convertToolConfig(toolChoice, tools) {
     throw new Error('convertToolConfig() must be implemented by subclass');
+  }
+
+  /**
+   * 转换工具调用（assistant 消息中的 tool_use/tool_calls）
+   * @param {Array} toolCalls - 源格式工具调用数组
+   * @returns {Array} - 目标格式工具调用数组
+   */
+  convertToolCalls(toolCalls) {
+    throw new Error('convertToolCalls() must be implemented by subclass');
   }
 
   /**

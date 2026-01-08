@@ -4,7 +4,7 @@
  * 带有自动过期和容量限制的 Map 封装，
  * 用于解决全局 Map 缓存无限增长的内存泄漏问题。
  *
- * @module utils/converters/common/ttlCache
+ * @module utils/ttlCache
  */
 
 /**
@@ -19,7 +19,7 @@ export class TTLCache {
    * @param {number} [options.cleanupInterval=60000] - 清理间隔（毫秒），默认 1 分钟
    */
   constructor(options = {}) {
-    this.ttlMs = options.ttlMs ?? 24 * 60 * 60 * 1000;
+    this.ttlMs = options.ttlMs ?? 600000;
     this.maxSize = options.maxSize ?? 500;
     this.cleanupInterval = options.cleanupInterval ?? 60 * 1000;
 

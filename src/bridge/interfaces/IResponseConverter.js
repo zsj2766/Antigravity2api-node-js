@@ -30,6 +30,15 @@ export class IResponseConverter {
   }
 
   /**
+   * 转换响应内容（源格式 → 目标格式内容块）
+   * @param {Array} parts - 源格式内容块数组
+   * @returns {object} - 目标格式内容
+   */
+  convertContent(parts) {
+    throw new Error('convertContent() must be implemented by subclass');
+  }
+
+  /**
    * 转换 token 使用统计
    * @param {object} usage - 源格式 usage
    * @returns {object} - 目标格式 usage
@@ -45,6 +54,16 @@ export class IResponseConverter {
    */
   convertError(error) {
     throw new Error('convertError() must be implemented by subclass');
+  }
+
+  /**
+   * 构建空响应（无候选结果时）
+   * @param {string} requestId - 请求 ID
+   * @param {string} model - 模型名称
+   * @returns {object} - 目标格式空响应
+   */
+  buildEmptyResponse(requestId, model) {
+    throw new Error('buildEmptyResponse() must be implemented by subclass');
   }
 }
 

@@ -6,18 +6,16 @@
  */
 
 import { IRequestConverter } from '../interfaces/IRequestConverter.js';
-import { generateToolUseId } from '../../utils/idGenerator.js';
-import { ToolConverter } from '../../utils/converters/common/toolConverter.js';
-import { normalizeMessagesForClaude } from '../../utils/converters/messageUtils.js';
-import { resolveThinkingBudget } from '../../utils/converters/thinkingConfig.js';
+import { generateToolUseId, resolveThinkingBudget, DATA_URL_REGEX } from '../common/index.js';
 import { safeJsonParse } from '../../utils/utils.js';
-
-// Data URL 正则
-const DATA_URL_REGEX = /^data:([^;]+);base64,(.+)$/;
 
 export class OpenAIToClaudeRequestConverter extends IRequestConverter {
   /**
    * 主入口：转换完整请求体
+   *
+   * @param {object} body - OpenAI Chat Completions API 请求体
+   * @param {object} context - 上下文信息
+   * @returns {Promise<object>} Claude Messages API 请求体
    */
   async convert(body, context = {}) {
     if (!body || typeof body !== 'object') {
@@ -28,7 +26,7 @@ export class OpenAIToClaudeRequestConverter extends IRequestConverter {
     }
 
     // 1. 规范化消息（提取 system，合并连续角色，确保 user 开头）
-    const { system, messages: normalizedMessages } = normalizeMessagesForClaude(body.messages);
+    const { system, messages: normalizedMessages } = this.normalizeMessagesForClaude(body.messages);
 
     // 2. 转换消息内容
     const claudeMessages = this.convertMessages(normalizedMessages);
@@ -36,11 +34,13 @@ export class OpenAIToClaudeRequestConverter extends IRequestConverter {
     // 3. 确保 user/assistant 交替
     const finalMessages = this.ensureAlternatingRoles(claudeMessages);
 
+    const maxTokens = body.max_tokens ?? body.max_completion_tokens ?? 10000;
+
     const result = {
       model: body.model,
-      max_tokens: body.max_tokens || 10000,
+      max_tokens: maxTokens,
       messages: finalMessages,
-      stream: body.stream !== false
+      stream: body.stream === true
     };
 
     // 添加 system
@@ -63,8 +63,18 @@ export class OpenAIToClaudeRequestConverter extends IRequestConverter {
     }
 
     // 处理 reasoning effort -> thinking budget
+    // 支持两种格式：
+    // 1. reasoning: { effort: 'low'|'medium'|'high' } (OpenAI 结构化格式)
+    // 2. reasoning_effort: 'low'|'medium'|'high' (OpenAI 简化格式)
+    let effort = null;
     if (body.reasoning && typeof body.reasoning === 'object') {
-      const budgetTokens = resolveThinkingBudget(body.reasoning.effort);
+      effort = body.reasoning.effort;
+    } else if (typeof body.reasoning_effort === 'string') {
+      effort = body.reasoning_effort;
+    }
+
+    if (effort) {
+      const budgetTokens = resolveThinkingBudget(effort);
 
       result.thinking = {
         type: 'enabled',
@@ -81,7 +91,10 @@ export class OpenAIToClaudeRequestConverter extends IRequestConverter {
   }
 
   /**
-   * 转换消息数组
+   * 转换消息数组 (OpenAI → Claude)
+   *
+   * @param {Array} messages - OpenAI 消息数组
+   * @returns {Array} Claude messages 数组
    */
   convertMessages(messages) {
     const claudeMessages = [];
@@ -139,7 +152,12 @@ export class OpenAIToClaudeRequestConverter extends IRequestConverter {
   }
 
   /**
-   * 转换内容
+   * 转换内容块 (OpenAI content → Claude content blocks)
+   *
+   * 注意：始终返回 Claude 内容块数组格式
+   *
+   * @param {string|Array} content - OpenAI 内容（字符串或内容块数组）
+   * @returns {Array} Claude 内容块数组
    */
   convertContent(content) {
     if (typeof content === 'string') {
@@ -175,6 +193,22 @@ export class OpenAIToClaudeRequestConverter extends IRequestConverter {
             blocks.push(fileBlock);
           }
           break;
+
+        case 'input_audio':
+          const audioBlock = this.convertAudio(part);
+          if (audioBlock) {
+            blocks.push(audioBlock);
+          }
+          break;
+
+        case 'input_file':
+          // OpenAI Responses API input_file 格式
+          // 支持 file_data (base64/URL)，file_id 降级为占位符
+          const inputFileBlock = this.convertInputFile(part);
+          if (inputFileBlock) {
+            blocks.push(inputFileBlock);
+          }
+          break;
       }
     }
 
@@ -183,6 +217,9 @@ export class OpenAIToClaudeRequestConverter extends IRequestConverter {
 
   /**
    * 转换文本内容
+   *
+   * @param {string|object} content - 文本内容
+   * @returns {object} Claude 文本块 { type: 'text', text: string }
    */
   convertText(content) {
     if (typeof content === 'string') {
@@ -192,7 +229,10 @@ export class OpenAIToClaudeRequestConverter extends IRequestConverter {
   }
 
   /**
-   * 转换图片内容
+   * 转换图片内容 (OpenAI → Claude)
+   *
+   * @param {object} imageUrl - OpenAI image_url 对象 { url: string }
+   * @returns {object|null} Claude image 块，不支持的格式返回 null
    */
   convertImage(imageUrl) {
     const url = imageUrl?.url;
@@ -226,60 +266,172 @@ export class OpenAIToClaudeRequestConverter extends IRequestConverter {
   }
 
   /**
-   * 转换文档内容
+   * 转换文档内容 (OpenAI → Claude)
+   *
+   * @param {object} filePart - OpenAI file 对象
+   * @returns {object|null} Claude document 块，不支持的格式返回 null
    */
   convertDocument(filePart) {
     if (!filePart) return null;
-
-    let source = null;
 
     // file_data (Data URL)
     if (filePart.file_data) {
       const match = filePart.file_data.match(DATA_URL_REGEX);
       if (match) {
-        source = {
-          type: 'base64',
-          media_type: match[1],
-          data: match[2]
+        const documentBlock = {
+          type: 'document',
+          source: {
+            type: 'base64',
+            media_type: match[1],
+            data: match[2]
+          }
         };
+
+        const docTitle = filePart.title || filePart.filename;
+        if (docTitle) {
+          documentBlock.title = docTitle;
+        }
+
+        if (filePart.context) {
+          documentBlock.context = filePart.context;
+        }
+
+        return documentBlock;
       }
     }
-    // file_id 引用
+    // file_id 引用 - Claude 不支持，返回文本占位符
     else if (filePart.file_id) {
-      source = {
-        type: 'file',
-        file_id: filePart.file_id
+      return {
+        type: 'text',
+        text: `[File reference not supported: ${filePart.file_id}]`
       };
     }
 
-    if (!source) return null;
-
-    const documentBlock = {
-      type: 'document',
-      source
-    };
-
-    const docTitle = filePart.title || filePart.filename;
-    if (docTitle) {
-      documentBlock.title = docTitle;
-    }
-
-    if (filePart.context) {
-      documentBlock.context = filePart.context;
-    }
-
-    return documentBlock;
+    return null;
   }
 
   /**
-   * 转换工具定义
+   * 转换音频内容 (OpenAI → Claude)
+   *
+   * Claude Messages API 不支持音频输入，降级为文本占位符。
+   *
+   * @param {object} content - OpenAI input_audio 块
+   * @returns {object|null} Claude 文本块
+   */
+  convertAudio(content) {
+    const audio = content?.input_audio;
+    if (!audio?.data) return null;
+    return { type: 'text', text: '[Audio input not supported by Claude]' };
+  }
+
+  /**
+   * 转换 input_file 内容 (OpenAI → Claude)
+   *
+   * OpenAI Responses API 的 input_file 格式，支持 file_data (base64/URL)。
+   * file_id 引用 Claude 不支持，降级为占位符。
+   *
+   * @param {object} part - OpenAI input_file 块
+   * @returns {object|null} Claude document 块或文本占位符
+   */
+  convertInputFile(part) {
+    if (!part) return null;
+
+    // file_data (base64 Data URL)
+    if (part.file_data) {
+      const match = part.file_data.match(DATA_URL_REGEX);
+      if (match) {
+        const mimeType = match[1];
+        // 图片类型
+        if (mimeType.startsWith('image/')) {
+          return {
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: mimeType,
+              data: match[2]
+            }
+          };
+        }
+        // 文档类型
+        return {
+          type: 'document',
+          source: {
+            type: 'base64',
+            media_type: mimeType,
+            data: match[2]
+          },
+          title: part.filename || undefined
+        };
+      }
+
+      // URL 格式
+      if (part.file_data.startsWith('http://') || part.file_data.startsWith('https://')) {
+        // 根据文件名推断类型
+        const isImage = part.filename && /\.(jpg|jpeg|png|gif|webp|bmp)$/i.test(part.filename);
+        if (isImage) {
+          return {
+            type: 'image',
+            source: {
+              type: 'url',
+              url: part.file_data
+            }
+          };
+        }
+        return {
+          type: 'document',
+          source: {
+            type: 'url',
+            url: part.file_data,
+            media_type: 'application/pdf'
+          },
+          title: part.filename || undefined
+        };
+      }
+    }
+
+    // file_id 引用 - Claude 不支持
+    if (part.file_id) {
+      return {
+        type: 'text',
+        text: `[File reference not supported: ${part.file_id}]`
+      };
+    }
+
+    return null;
+  }
+
+  /**
+   * 转换工具定义 (OpenAI → Claude)
+   *
+   * @param {Array} tools - OpenAI function 工具定义数组
+   * @returns {Array} Claude 工具定义数组
    */
   convertTools(tools) {
-    return ToolConverter.toClaude(tools);
+    if (!tools || !Array.isArray(tools) || tools.length === 0) {
+      return [];
+    }
+
+    return tools.map(tool => {
+      // 跳过非 function 类型
+      if (tool.type && tool.type !== 'function') return null;
+
+      const func = tool.function || tool;
+      if (!func || !func.name) return null;
+
+      return {
+        name: func.name,
+        description: func.description || '',
+        input_schema: func.parameters || { type: 'object', properties: {} }
+      };
+    }).filter(Boolean);
   }
 
   /**
-   * 转换工具选择配置
+   * 转换工具选择配置 (OpenAI → Claude)
+   *
+   * @param {string|object} toolChoice - OpenAI tool_choice 配置
+   * @param {Array} tools - 工具列表
+   * @returns {object} Claude tool_choice 配置
    */
   convertToolConfig(toolChoice, tools) {
     if (!toolChoice) {
@@ -310,7 +462,10 @@ export class OpenAIToClaudeRequestConverter extends IRequestConverter {
   }
 
   /**
-   * 转换工具调用
+   * 转换工具调用 (OpenAI tool_calls → Claude tool_use blocks)
+   *
+   * @param {Array} toolCalls - OpenAI tool_calls 数组
+   * @returns {Array} Claude tool_use 块数组
    */
   convertToolCalls(toolCalls) {
     if (!Array.isArray(toolCalls)) return [];
@@ -327,7 +482,10 @@ export class OpenAIToClaudeRequestConverter extends IRequestConverter {
   }
 
   /**
-   * 转换工具调用结果
+   * 转换工具调用结果 (OpenAI tool message → Claude tool_result block)
+   *
+   * @param {object} message - OpenAI tool 消息
+   * @returns {object} Claude tool_result 块
    */
   convertToolResult(message) {
     const rawContent = message.content;
@@ -359,7 +517,10 @@ export class OpenAIToClaudeRequestConverter extends IRequestConverter {
   }
 
   /**
-   * 确保消息交替出现
+   * 确保消息交替出现（Claude 要求 user/assistant 交替）
+   *
+   * @param {Array} messages - Claude 消息数组
+   * @returns {Array} 确保交替后的消息数组
    */
   ensureAlternatingRoles(messages) {
     if (!messages || messages.length === 0) {
@@ -390,6 +551,115 @@ export class OpenAIToClaudeRequestConverter extends IRequestConverter {
     }
 
     return result;
+  }
+
+  /**
+   * 规范化 OpenAI 消息为 Claude 格式
+   *
+   * 处理: 提取 system/developer 消息、合并连续同角色消息、确保 user 开头
+   *
+   * @param {Array} messages - OpenAI 消息数组
+   * @returns {{ system: string, messages: Array }} 提取的 system 和规范化后的消息
+   */
+  normalizeMessagesForClaude(messages) {
+    if (!Array.isArray(messages)) {
+      return {
+        system: '',
+        messages: [{ role: 'user', content: [{ type: 'text', text: '' }] }]
+      };
+    }
+
+    // 1. 提取 system/developer 消息
+    const systemParts = [];
+    const filteredMessages = [];
+
+    for (const msg of messages) {
+      if (msg.role === 'system' || msg.role === 'developer') {
+        if (typeof msg.content === 'string') {
+          systemParts.push(msg.content);
+        } else if (Array.isArray(msg.content)) {
+          const text = msg.content
+            .filter(p => p.type === 'text')
+            .map(p => p.text || '')
+            .join('\n');
+          if (text) systemParts.push(text);
+        }
+      } else {
+        filteredMessages.push(msg);
+      }
+    }
+
+    // 2. 合并连续同角色消息
+    const merged = [];
+    let current = null;
+
+    for (const msg of filteredMessages) {
+      if (!msg || !msg.role) continue;
+
+      // tool 消息保持原样
+      if (msg.role === 'tool') {
+        if (current) {
+          merged.push(current);
+          current = null;
+        }
+        merged.push({
+          role: 'tool',
+          content: this.normalizeContentArray(msg.content),
+          tool_call_id: msg.tool_call_id
+        });
+        continue;
+      }
+
+      // 规范化角色
+      const role = msg.role === 'assistant' ? 'assistant' : 'user';
+
+      if (current && current.role === role) {
+        // 合并内容
+        const existingArr = this.normalizeContentArray(current.content);
+        const newArr = this.normalizeContentArray(msg.content);
+        current.content = [...existingArr, ...newArr];
+      } else {
+        if (current) merged.push(current);
+        current = {
+          role,
+          content: this.normalizeContentArray(msg.content)
+        };
+      }
+    }
+
+    if (current) merged.push(current);
+
+    // 3. 确保 user 开头
+    let normalized = merged;
+    if (normalized.length === 0) {
+      normalized = [{ role: 'user', content: [{ type: 'text', text: '' }] }];
+    } else if (normalized[0].role !== 'user') {
+      normalized = [
+        { role: 'user', content: [{ type: 'text', text: '[Conversation start]' }] },
+        ...normalized
+      ];
+    }
+
+    return {
+      system: systemParts.join('\n\n'),
+      messages: normalized
+    };
+  }
+
+  /**
+   * 规范化内容为数组格式
+   *
+   * @param {string|Array} content - 内容（字符串或数组）
+   * @returns {Array} 规范化后的内容数组
+   */
+  normalizeContentArray(content) {
+    if (typeof content === 'string') {
+      return [{ type: 'text', text: content }];
+    }
+    if (Array.isArray(content)) {
+      return content;
+    }
+    return [{ type: 'text', text: '' }];
   }
 }
 

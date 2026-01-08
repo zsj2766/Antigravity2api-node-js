@@ -6,14 +6,23 @@
  */
 
 import { IResponseConverter } from '../interfaces/IResponseConverter.js';
-import { ClaudeProtocolEmitter } from '../../utils/converters/common/ClaudeProtocolEmitter.js';
-import { generateToolUseId, generateRequestId } from '../../utils/idGenerator.js';
-import { mapOpenAIFinishToClaude } from '../../utils/converters/stopReasonMapper.js';
-import { safeJsonParse } from '../../utils/utils.js';
+import {
+  ClaudeProtocolEmitter,
+  generateToolUseId,
+  generateRequestId,
+  mapOpenAIFinishToClaude
+} from '../common/index.js';
+import { safeJsonParse, getTextThoughtSignature } from '../../utils/utils.js';
 
 export class OpenAIToClaudeResponseConverter extends IResponseConverter {
   /**
-   * 非流式响应转换
+   * 非流式响应转换 (OpenAI → Claude)
+   *
+   * 注意：无候选结果时返回空响应
+   *
+   * @param {object} response - OpenAI 响应
+   * @param {object} context - 上下文
+   * @returns {object} Claude Messages 响应
    */
   convert(response, context = {}) {
     const requestId = context.requestId || generateRequestId();
@@ -42,7 +51,25 @@ export class OpenAIToClaudeResponseConverter extends IResponseConverter {
   }
 
   /**
-   * 创建流式响应处理器
+   * 转换响应内容 (OpenAI → Claude)
+   *
+   * 注意：内部调用 extractContent
+   *
+   * @param {object} message - OpenAI message
+   * @returns {Array} Claude content 块数组
+   */
+  convertContent(message) {
+    return this.extractContent(message || {});
+  }
+
+  /**
+   * 创建流式响应处理器 (OpenAI → Claude)
+   *
+   * 注意：返回包含 process(chunk) 与 finish(finalChunk) 的处理器
+   *
+   * @param {object} res - Express response 对象
+   * @param {object} context - 上下文（requestId, model 等）
+   * @returns {object} 流处理器
    */
   createStreamProcessor(res, context = {}) {
     const emitter = new ClaudeProtocolEmitter(res, {
@@ -69,6 +96,21 @@ export class OpenAIToClaudeResponseConverter extends IResponseConverter {
         if (!choice) return;
 
         const delta = choice.delta || {};
+
+        // 推理内容（OpenAI o1/o3 系列的 reasoning_content → Claude thinking）
+        if (delta.reasoning_content) {
+          // 优先使用透传签名 (Scheme B)
+          if (delta.reasoning_signature) {
+            emitter.sendSignature(delta.reasoning_signature);
+          } else {
+            // 降级：尝试从缓存恢复签名（非流式场景可能有效）
+            const sig = getTextThoughtSignature(delta.reasoning_content);
+            if (sig?.signature) {
+              emitter.sendSignature(sig.signature);
+            }
+          }
+          emitter.sendThinking(delta.reasoning_content);
+        }
 
         // 文本内容
         if (delta.content) {
@@ -130,7 +172,10 @@ export class OpenAIToClaudeResponseConverter extends IResponseConverter {
   }
 
   /**
-   * 转换 token 使用统计
+   * 转换 token 使用统计 (OpenAI → Claude)
+   *
+   * @param {object} usage - OpenAI usage
+   * @returns {object} Claude usage
    */
   convertUsage(usage) {
     if (!usage) {
@@ -147,7 +192,10 @@ export class OpenAIToClaudeResponseConverter extends IResponseConverter {
   }
 
   /**
-   * 转换错误响应
+   * 转换错误响应 (OpenAI → Claude)
+   *
+   * @param {Error|object} error - OpenAI 错误
+   * @returns {object} Claude 错误响应
    */
   convertError(error) {
     const message = error?.message || error?.error?.message || 'Unknown error';
@@ -162,17 +210,96 @@ export class OpenAIToClaudeResponseConverter extends IResponseConverter {
   }
 
   /**
-   * 从 OpenAI 消息提取 Claude 内容块
+   * 从 OpenAI 消息提取 Claude 内容块 (OpenAI → Claude)
+   *
+   * 注意：reasoning_content 会映射为 Claude thinking
+   *
+   * @param {object} message - OpenAI message
+   * @returns {Array} Claude content 块数组
    */
   extractContent(message) {
     const content = [];
 
-    // 文本内容
+    // 推理内容（OpenAI o1/o3 系列的 reasoning_content → Claude thinking）
+    if (message.reasoning_content) {
+      const thinkingBlock = {
+        type: 'thinking',
+        thinking: message.reasoning_content
+      };
+
+      // 优先使用透传签名 (Scheme B)
+      if (message.reasoning_signature) {
+        thinkingBlock.signature = message.reasoning_signature;
+      } else {
+        // 降级：尝试从缓存恢复签名
+        const sig = getTextThoughtSignature(message.reasoning_content);
+        if (sig?.signature) {
+          thinkingBlock.signature = sig.signature;
+        }
+      }
+      content.push(thinkingBlock);
+    }
+
+    // 文本与多模态内容（处理 Chain 3 中的非标准多模态扩展）
     if (message.content) {
-      content.push({
-        type: 'text',
-        text: message.content
-      });
+      if (Array.isArray(message.content)) {
+        for (const part of message.content) {
+          if (!part) continue;
+
+          if (part.type === 'text' && part.text) {
+            content.push({ type: 'text', text: part.text });
+          } else if (part.type === 'image_url') {
+            // OpenAI image_url → Claude image
+            const url = part.image_url?.url || '';
+            const isBase64 = url.startsWith('data:');
+
+            if (isBase64) {
+              const match = url.match(/^data:([^;]+);base64,(.+)$/);
+              if (match) {
+                content.push({
+                  type: 'image',
+                  source: {
+                    type: 'base64',
+                    media_type: match[1],
+                    data: match[2]
+                  }
+                });
+              }
+            } else {
+              // URL 类型
+              content.push({
+                type: 'image',
+                source: {
+                  type: 'url',
+                  url: url
+                }
+              });
+            }
+          } else if (part.type === 'file') {
+             // OpenAI file 扩展 → Claude document
+             const fileData = part.file?.file_data || '';
+             const filename = part.file?.filename || 'file';
+             const match = fileData.match(/^data:([^;]+);base64,(.+)$/);
+             if (match) {
+               content.push({
+                 type: 'document',
+                 source: {
+                   type: 'base64',
+                   media_type: match[1],
+                   data: match[2]
+                 }
+               });
+             } else {
+               content.push({
+                 type: 'text',
+                 text: `[File: ${filename}]`
+               });
+             }
+          }
+        }
+      } else {
+        content.push({ type: 'text', text: message.content });
+      }
     }
 
     // 工具调用
@@ -192,7 +319,11 @@ export class OpenAIToClaudeResponseConverter extends IResponseConverter {
   }
 
   /**
-   * 构建空响应
+   * 构建空响应 (OpenAI → Claude)
+   *
+   * @param {string} requestId - 请求 ID
+   * @param {string} model - 模型名称
+   * @returns {object} Claude 空响应
    */
   buildEmptyResponse(requestId, model) {
     return {
