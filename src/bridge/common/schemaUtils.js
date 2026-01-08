@@ -224,6 +224,11 @@ function convertConstToEnum(obj) {
  * 原因：Gemini 不支持验证约束关键字，但模型可以理解自然语言描述的约束。
  * 策略：将约束信息追加到 description 字段中。
  *
+ * 重要：验证约束（如 pattern, format）只在 Schema 定义层级有效，
+ * 需要与 properties 中的同名属性区分开。判断方法：
+ * - 如果当前对象有 type 字段，说明是 Schema 定义，pattern/format 是约束
+ * - 如果当前对象没有 type 字段（如在 properties 容器中），pattern/format 是属性名
+ *
  * @param {object} obj - Schema 对象
  * @param {string} path - 当前路径（用于调试）
  * @returns {object} 处理后的对象
@@ -238,9 +243,15 @@ function processSchema(obj, path = '') {
   const hints = [];
   const result = {};
 
+  // 判断当前对象是否是 Schema 定义（有 type 字段）
+  // 只有在 Schema 定义中，VALIDATION_FIELDS 才是约束关键字
+  // 在 properties 容器对象中，这些可能是属性名
+  const isSchemaDefinition = 'type' in obj;
+
   for (const [key, value] of Object.entries(obj)) {
-    // 收集验证约束作为提示
-    if (VALIDATION_FIELDS.has(key)) {
+    // 只有在 Schema 定义中才收集验证约束作为提示
+    // 避免将 properties 中名为 pattern/format 的属性误判为约束
+    if (isSchemaDefinition && VALIDATION_FIELDS.has(key)) {
       hints.push(`${key}: ${JSON.stringify(value)}`);
       continue; // 不保留原字段
     }

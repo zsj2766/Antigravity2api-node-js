@@ -253,13 +253,16 @@ export class GeminiToOpenAIResponseConverter extends IResponseConverter {
     const promptTokens = usageMetadata.promptTokenCount || usageMetadata.inputTokenCount || 0;
     const completionTokensBase = usageMetadata.candidatesTokenCount || usageMetadata.outputTokenCount || 0;
     const reasoningTokens = usageMetadata.thoughtsTokenCount || 0;
-    const completionTokens = completionTokensBase + reasoningTokens;
+    // OpenAI spec: completion_tokens does NOT include reasoning_tokens
+    // reasoning_tokens are reported separately in completion_tokens_details
+    // total_tokens should include both
+    const completionTokens = completionTokensBase;
     const cachedTokens = usageMetadata.cachedContentTokenCount || 0;
 
     const usage = {
       prompt_tokens: promptTokens,
       completion_tokens: completionTokens,
-      total_tokens: promptTokens + completionTokens
+      total_tokens: promptTokens + completionTokens + reasoningTokens
     };
 
     // 添加 cached tokens 详情（OpenAI 格式）

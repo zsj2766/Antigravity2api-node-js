@@ -89,8 +89,8 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
     const contents = [];
 
     for (const message of messages) {
-      if (message.role === 'system') {
-        // system 消息单独处理为 systemInstruction，这里跳过
+      if (message.role === 'system' || message.role === 'developer') {
+        // system/developer 消息单独处理为 systemInstruction，这里跳过
         continue;
       }
 
