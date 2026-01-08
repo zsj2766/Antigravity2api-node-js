@@ -240,6 +240,11 @@ function processSchema(obj, path = '') {
     return obj.map((item, i) => processSchema(item, `${path}[${i}]`));
   }
 
+  const normalized = wrapImplicitProperties(obj, path);
+  if (normalized !== obj) {
+    return processSchema(normalized, path);
+  }
+
   const hints = [];
   const result = {};
 
@@ -300,6 +305,82 @@ function processSchema(obj, path = '') {
   }
 
   return result;
+}
+
+function wrapImplicitProperties(obj, path) {
+  if (isPropertiesContainerPath(path)) return obj;
+  if (!shouldWrapImplicitProperties(obj)) return obj;
+  return {
+    type: 'object',
+    properties: obj
+  };
+}
+
+function isPropertiesContainerPath(path) {
+  if (!path) return false;
+  return path.endsWith('.properties');
+}
+
+function shouldWrapImplicitProperties(obj) {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return false;
+
+  const keys = Object.keys(obj);
+  if (keys.length === 0) return false;
+  if (hasSchemaMarkers(obj)) return false;
+
+  let hasSchemaLikeChild = false;
+  for (const value of Object.values(obj)) {
+    if (!looksLikeSchemaNode(value)) {
+      return false;
+    }
+    hasSchemaLikeChild = true;
+  }
+
+  return hasSchemaLikeChild;
+}
+
+function hasSchemaMarkers(obj) {
+  const markers = new Set([
+    'type',
+    'properties',
+    'required',
+    'items',
+    'anyOf',
+    'oneOf',
+    'allOf',
+    'enum',
+    'const',
+    'description',
+    'title',
+    '$ref',
+    'additionalProperties'
+  ]);
+
+  for (const [key, value] of Object.entries(obj)) {
+    if (markers.has(key)) return true;
+    if (VALIDATION_FIELDS.has(key) && !(key === 'pattern' && typeof value === 'object')) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function looksLikeSchemaNode(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+
+  return (
+    'type' in value ||
+    'properties' in value ||
+    'items' in value ||
+    'enum' in value ||
+    'anyOf' in value ||
+    'oneOf' in value ||
+    'allOf' in value ||
+    '$ref' in value ||
+    'description' in value ||
+    'title' in value
+  );
 }
 
 // ============================================================================

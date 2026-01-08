@@ -174,6 +174,9 @@ export class OpenAIToClaudeResponseConverter extends IResponseConverter {
   /**
    * 转换 token 使用统计 (OpenAI → Claude)
    *
+   * 注意：Claude output_tokens 应包含思考 tokens
+   * OpenAI 的 reasoning_tokens 在 completion_tokens_details 中单独报告
+   *
    * @param {object} usage - OpenAI usage
    * @returns {object} Claude usage
    */
@@ -185,10 +188,27 @@ export class OpenAIToClaudeResponseConverter extends IResponseConverter {
       };
     }
 
-    return {
-      input_tokens: usage.prompt_tokens || 0,
-      output_tokens: usage.completion_tokens || 0
+    const inputTokens = usage.prompt_tokens || 0;
+    const completionTokens = usage.completion_tokens || 0;
+    const reasoningTokens = usage.completion_tokens_details?.reasoning_tokens || 0;
+    const cachedTokens = usage.prompt_tokens_details?.cached_tokens || 0;
+
+    // Claude output_tokens = completion_tokens + reasoning_tokens
+    // 注意：如果上游已将 reasoning_tokens 包含在 completion_tokens 中，这里会重复计算
+    // 但按 OpenAI 规范，completion_tokens 不包含 reasoning_tokens，所以这里是正确的
+    const outputTokens = completionTokens + reasoningTokens;
+
+    const result = {
+      input_tokens: inputTokens,
+      output_tokens: outputTokens
     };
+
+    // 透传缓存 tokens
+    if (cachedTokens > 0) {
+      result.cache_read_input_tokens = cachedTokens;
+    }
+
+    return result;
   }
 
   /**
