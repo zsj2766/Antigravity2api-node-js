@@ -36,6 +36,8 @@ import { saveBase64Image } from '../utils/imageStorage.js';
 
 /**
  * 处理聊天流式响应
+ *
+ * 使用 try/finally 确保异常时也能正确收尾，避免客户端看不到完整的 SSE 事件
  */
 async function handleChatStream(requestBody, token, res, id, model, streamEventsForLog) {
   setStreamHeaders(res);
@@ -49,15 +51,29 @@ async function handleChatStream(requestBody, token, res, id, model, streamEvents
 
   let lastChunk = null;
   let usage = null;
+  let streamError = null;
 
-  for await (const { chunk, usage: u } of generateAssistantResponseStream(requestBody, token)) {
-    streamEventsForLog.push(chunk);
-    lastChunk = chunk;
-    if (u) usage = u;
-    processor.process(chunk);
+  try {
+    for await (const { chunk, usage: u } of generateAssistantResponseStream(requestBody, token)) {
+      streamEventsForLog.push(chunk);
+      lastChunk = chunk;
+      if (u) usage = u;
+      processor.process(chunk);
+    }
+  } catch (error) {
+    streamError = error;
+    // 不在这里抛出，让 finally 先执行收尾
+  } finally {
+    // 异常时使用 'error' 作为 finish_reason，正常时从 lastChunk 推断
+    const finishReason = streamError ? 'error' : undefined;
+    processor.finish(lastChunk, finishReason);
   }
 
-  processor.finish(lastChunk);
+  // 收尾完成后再抛出异常，让上层处理
+  if (streamError) {
+    throw streamError;
+  }
+
   return { usage, streamEvents: streamEventsForLog };
 }
 

@@ -219,12 +219,12 @@ export class GeminiToOpenAIResponseConverter extends IResponseConverter {
       /**
        * 完成流
        */
-      finish(finalChunk) {
+      finish(finalChunk, overrideFinishReason) {
         const candidate = finalChunk?.candidates?.[0];
         // 传递 hasToolCalls 参数以正确映射 finish_reason
-        const finishReason = candidate?.finishReason
+        const finishReason = overrideFinishReason || (candidate?.finishReason
           ? mapGeminiStopReason(candidate.finishReason, hasToolCalls).openai
-          : 'stop';
+          : 'stop');
 
         const usage = finalChunk?.usageMetadata;
         emitter.finish(usage, finishReason);

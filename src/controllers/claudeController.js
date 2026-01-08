@@ -59,6 +59,8 @@ export function handleCountTokens(req, res) {
 
 /**
  * 处理 Claude 流式响应
+ *
+ * 使用 try/finally 确保异常时也能正确收尾，避免客户端看不到 message_delta + message_stop 事件
  */
 async function handleClaudeStream(requestBody, token, res, requestId, model, inputTokens) {
   setStreamHeaders(res);
@@ -73,19 +75,33 @@ async function handleClaudeStream(requestBody, token, res, requestId, model, inp
 
   let lastChunk = null;
   let usage = null;
+  let streamError = null;
 
-  for await (const { chunk, usage: u } of generateAssistantResponseStream(requestBody, token)) {
-    lastChunk = chunk;
-    if (u) usage = u;
-    processor.process(chunk);
+  try {
+    for await (const { chunk, usage: u } of generateAssistantResponseStream(requestBody, token)) {
+      lastChunk = chunk;
+      if (u) usage = u;
+      processor.process(chunk);
+    }
+  } catch (error) {
+    streamError = error;
+    // 不在这里抛出，让 finally 先执行收尾
+  } finally {
+    // 确保 usage 传递到 finish，避免 lastChunk.usageMetadata 缺失时缓存 token 丢失
+    if (lastChunk && usage && !lastChunk.usageMetadata) {
+      lastChunk = { ...lastChunk, usageMetadata: usage };
+    }
+
+    // 异常时使用 'error' 作为 stop_reason，正常时从 lastChunk 推断
+    const stopReason = streamError ? 'error' : undefined;
+    processor.finish(lastChunk, stopReason);
   }
 
-  // 确保 usage 传递到 finish，避免 lastChunk.usageMetadata 缺失时缓存 token 丢失
-  if (lastChunk && usage && !lastChunk.usageMetadata) {
-    lastChunk = { ...lastChunk, usageMetadata: usage };
+  // 收尾完成后再抛出异常，让上层处理
+  if (streamError) {
+    throw streamError;
   }
 
-  processor.finish(lastChunk);
   return { usage };
 }
 

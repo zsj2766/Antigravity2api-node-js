@@ -186,11 +186,11 @@ export class GeminiToClaudeResponseConverter extends IResponseConverter {
       /**
        * 完成流
        */
-      finish(finalChunk) {
+      finish(finalChunk, overrideStopReason) {
         const candidate = finalChunk?.candidates?.[0];
-        let stopReason = 'end_turn';
+        let stopReason = overrideStopReason || 'end_turn';
 
-        if (candidate?.finishReason) {
+        if (!overrideStopReason && candidate?.finishReason) {
           // 传递 hasToolUse 参数以正确映射 stop_reason
           stopReason = mapGeminiStopReason(candidate.finishReason, hasToolUse).claude;
         }
