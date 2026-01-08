@@ -39,14 +39,15 @@ import { saveBase64Image } from '../utils/imageStorage.js';
  *
  * 使用 try/finally 确保异常时也能正确收尾，避免客户端看不到完整的 SSE 事件
  */
-async function handleChatStream(requestBody, token, res, id, model, streamEventsForLog) {
+async function handleChatStream(requestBody, token, res, id, model, streamEventsForLog, includeUsage) {
   setStreamHeaders(res);
   const converter = new GeminiToOpenAIResponseConverter();
   const processor = converter.createStreamProcessor(res, {
     requestId: id,
     model,
     inputTokens: 0,
-    imageHandler: saveBase64Image
+    imageHandler: saveBase64Image,
+    includeUsage
   });
 
   let lastChunk = null;
@@ -167,6 +168,7 @@ function sendErrorResponse(res, error, stream, model, retryCount) {
  */
 export const createChatCompletionHandler = (resolveToken, options = {}) => async (req, res) => {
   const { messages, model, stream = true, tools, tool_choice, ...params } = req.body || {};
+  const includeUsage = req.body?.stream_options?.include_usage === true;
   const startedAt = Date.now();
   const correlationId = req.headers['x-correlation-id'] || req.headers['x-request-id'] || crypto.randomUUID();
   const requestSnapshot = createRequestSnapshot(req);
@@ -217,7 +219,15 @@ export const createChatCompletionHandler = (resolveToken, options = {}) => async
         const { id, created } = createResponseMeta();
 
         if (stream) {
-          const { usage, streamEvents } = await handleChatStream(requestBody, token, res, id, model, streamEventsForLog);
+          const { usage, streamEvents } = await handleChatStream(
+            requestBody,
+            token,
+            res,
+            id,
+            model,
+            streamEventsForLog,
+            includeUsage
+          );
           return { stream: true, usage, events: streamEvents, summary: summarizeStreamEvents(streamEvents) };
         } else {
           const { payload, result: chatResult } = await handleChatNonStream(requestBody, token, res, id, created, model);

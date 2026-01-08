@@ -14,6 +14,12 @@ import {
 } from '../common/index.js';
 import { registerTextThoughtSignature, registerThoughtSignature } from '../../utils/utils.js';
 import log from '../../utils/logger.js';
+import { fetchFileAsBase64 } from '../../utils/fileFetcher.js';
+
+const DEFAULT_FILE_FETCH_OPTIONS = {
+  maxBytes: 10 * 1024 * 1024,
+  timeoutMs: 60000
+};
 
 export class GeminiToClaudeResponseConverter extends IResponseConverter {
   /**
@@ -84,6 +90,9 @@ export class GeminiToClaudeResponseConverter extends IResponseConverter {
           inputTokens: context.inputTokens || 0
         });
 
+    const fileOptions = context.fileOptions || DEFAULT_FILE_FETCH_OPTIONS;
+    const converter = this;
+
     // 追踪是否有工具调用
     let hasToolUse = false;
 
@@ -93,7 +102,7 @@ export class GeminiToClaudeResponseConverter extends IResponseConverter {
       /**
        * 处理 Gemini 流式 chunk
        */
-      process(chunk) {
+      async process(chunk) {
         const candidate = chunk.candidates?.[0];
         if (!candidate) return;
 
@@ -153,13 +162,19 @@ export class GeminiToClaudeResponseConverter extends IResponseConverter {
             }
           }
 
-          // 文件数据：fileData
-          // TODO: Gemini 返回的是 fileUri (URL)，Claude 需要 base64 数据
-          // 完整实现需要 HTTP 下载 fileUri 内容并转换为 base64，暂不支持
           if (part.fileData) {
             const mimeType = part.fileData.mimeType || 'application/octet-stream';
             const url = part.fileData.fileUri || '';
-            emitter.sendText(`[File: ${mimeType}](${url})`);
+            const resolved = await converter.resolveFileData(part, fileOptions);
+            if (resolved?.data) {
+              if (resolved.mimeType?.startsWith('image/')) {
+                emitter.sendImage?.(resolved.data, resolved.mimeType);
+              } else {
+                emitter.sendDocument?.(resolved.data, resolved.mimeType);
+              }
+            } else {
+              emitter.sendText(`[File: ${mimeType}](${url})`);
+            }
           }
 
           // 函数调用
@@ -201,6 +216,143 @@ export class GeminiToClaudeResponseConverter extends IResponseConverter {
     };
   }
 
+  async convertContentAsync(parts, imageHandler = null, fileOptions = DEFAULT_FILE_FETCH_OPTIONS) {
+    return this.convertGeminiToClaudeAsync(parts, imageHandler, fileOptions);
+  }
+
+  async resolveFileData(part, fileOptions = DEFAULT_FILE_FETCH_OPTIONS) {
+    const mimeType = part?.fileData?.mimeType || 'application/octet-stream';
+    const url = part?.fileData?.fileUri || '';
+    if (!url) return null;
+    return fetchFileAsBase64(url, mimeType, fileOptions);
+  }
+
+  async convertGeminiToClaudeAsync(parts, imageHandler = null, fileOptions = DEFAULT_FILE_FETCH_OPTIONS) {
+    if (!Array.isArray(parts)) {
+      return [];
+    }
+
+    const blocks = [];
+    let lastThinkingBlock = null;
+    let pendingThinkingSignature = null;
+    let pendingThinkingSignatureIndex = null;
+
+    for (const part of parts) {
+      if (!part) continue;
+
+      if (part.thought === true) {
+        if (part.text !== undefined) {
+          if (part.thoughtSignature) {
+            registerTextThoughtSignature(part.text, part.thoughtSignature);
+          }
+          const thinkingBlock = {
+            type: 'thinking',
+            thinking: part.text ?? ''
+          };
+          if (part.thoughtSignature) {
+            thinkingBlock.signature = part.thoughtSignature;
+          } else if (pendingThinkingSignature) {
+            thinkingBlock.signature = pendingThinkingSignature;
+            pendingThinkingSignature = null;
+            pendingThinkingSignatureIndex = null;
+          }
+          blocks.push(thinkingBlock);
+          lastThinkingBlock = thinkingBlock;
+        } else if (part.thoughtSignature) {
+          if (lastThinkingBlock && !lastThinkingBlock.signature) {
+            lastThinkingBlock.signature = part.thoughtSignature;
+          } else {
+            pendingThinkingSignature = part.thoughtSignature;
+            pendingThinkingSignatureIndex = blocks.length;
+          }
+        }
+        continue;
+      } else if (part.text !== undefined) {
+        if (part.thoughtSignature) {
+          registerTextThoughtSignature(part.text, part.thoughtSignature);
+        }
+        blocks.push({
+          type: 'text',
+          text: part.text
+        });
+      } else if (part.functionCall) {
+        const id = part.functionCall.id || generateToolUseId();
+        if (part.thoughtSignature) {
+          registerThoughtSignature(id, part.thoughtSignature);
+        }
+        blocks.push({
+          type: 'tool_use',
+          id,
+          name: part.functionCall.name,
+          input: part.functionCall.args || {}
+        });
+      } else if (part.inlineData && part.inlineData.mimeType?.startsWith('image/')) {
+        blocks.push({
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: part.inlineData.mimeType,
+            data: part.inlineData.data
+          }
+        });
+      } else if (part.inlineData) {
+        blocks.push({
+          type: 'document',
+          source: {
+            type: 'base64',
+            media_type: part.inlineData.mimeType,
+            data: part.inlineData.data
+          }
+        });
+      } else if (part.fileData) {
+        const mimeType = part.fileData.mimeType || 'application/octet-stream';
+        const url = part.fileData.fileUri || '';
+        const resolved = await this.resolveFileData(part, fileOptions);
+        if (resolved?.data) {
+          if (resolved.mimeType?.startsWith('image/')) {
+            blocks.push({
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: resolved.mimeType,
+                data: resolved.data
+              }
+            });
+          } else {
+            blocks.push({
+              type: 'document',
+              source: {
+                type: 'base64',
+                media_type: resolved.mimeType,
+                data: resolved.data
+              }
+            });
+          }
+        } else {
+          blocks.push({
+            type: 'text',
+            text: `[File: ${mimeType}](${url})`
+          });
+        }
+      }
+    }
+
+    if (pendingThinkingSignature) {
+      const signatureBlock = {
+        type: 'thinking',
+        thinking: '',
+        signature: pendingThinkingSignature
+      };
+      if (pendingThinkingSignatureIndex === null || pendingThinkingSignatureIndex >= blocks.length) {
+        blocks.push(signatureBlock);
+      } else {
+        blocks.splice(pendingThinkingSignatureIndex, 0, signatureBlock);
+      }
+    }
+
+    return blocks;
+  }
+
   /**
    * 转换 token 使用统计 (Gemini → Claude)
    *
@@ -218,7 +370,9 @@ export class GeminiToClaudeResponseConverter extends IResponseConverter {
     }
 
     const inputTokens = usageMetadata.promptTokenCount || usageMetadata.inputTokenCount || 0;
-    const outputTokens = usageMetadata.candidatesTokenCount || usageMetadata.outputTokenCount || 0;
+    const outputTokensBase = usageMetadata.candidatesTokenCount || usageMetadata.outputTokenCount || 0;
+    const thoughtsTokens = usageMetadata.thoughtsTokenCount || 0;
+    const outputTokens = outputTokensBase + thoughtsTokens;
     const cachedTokens = usageMetadata.cachedContentTokenCount || 0;
 
     return {

@@ -718,6 +718,27 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
       config.stopSequences = Array.isArray(parameters.stop) ? parameters.stop : [parameters.stop];
     }
 
+    // response_format -> Gemini response schema / mime type
+    const responseFormat = parameters.response_format;
+    if (responseFormat) {
+      const format = typeof responseFormat === 'string' ? { type: responseFormat } : responseFormat;
+      const formatType = typeof format?.type === 'string' ? format.type : null;
+
+      if (formatType === 'json_object' || formatType === 'json_schema') {
+        config.responseMimeType = 'application/json';
+      }
+
+      if (formatType === 'json_schema') {
+        const schema =
+          format?.json_schema?.schema ||
+          format?.json_schema ||
+          format?.schema;
+        if (schema && typeof schema === 'object') {
+          config.responseSchema = cleanJsonSchema(schema);
+        }
+      }
+    }
+
     // 处理 reasoning effort -> thinking config
     // 支持两种格式：
     // 1. reasoning: { effort: 'low'|'medium'|'high' } (OpenAI 结构化格式)

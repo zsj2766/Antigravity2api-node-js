@@ -913,7 +913,12 @@ export async function generateAssistantResponseNoStream(requestBody, token) {
     const parts = candidate?.content?.parts || [];
 
     // 使用 Converter 保持原始顺序的 Claude 内容块
-    const contentBlocks = geminiToClaudeConverter.convertContent(parts);
+    let contentBlocks = [];
+    try {
+        contentBlocks = await geminiToClaudeConverter.convertContentAsync(parts, saveBase64Image);
+    } catch {
+        contentBlocks = geminiToClaudeConverter.convertContent(parts);
+    }
     const usage = toOpenAiUsage(data.response?.usageMetadata);
     let content = '';
     let thinkingContent = '';

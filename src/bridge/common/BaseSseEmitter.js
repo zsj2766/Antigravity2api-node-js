@@ -30,12 +30,19 @@ export class BaseSseEmitter {
       usage?.inputTokenCount ??
       this.inputTokens;
 
-    const outputTokens =
+    const outputTokensBase =
       usage?.output_tokens ??
       usage?.completion_tokens ??
       usage?.candidatesTokenCount ??
       usage?.outputTokenCount ??
       this.totalOutputTokens;
+
+    const thoughtsTokens = Number.isFinite(usage?.thoughtsTokenCount) ? usage.thoughtsTokenCount : 0;
+    const shouldAddThoughts = thoughtsTokens > 0 &&
+      usage?.completion_tokens === undefined &&
+      usage?.output_tokens === undefined;
+
+    const outputTokens = shouldAddThoughts ? outputTokensBase + thoughtsTokens : outputTokensBase;
 
     return {
       input_tokens: inputTokens,

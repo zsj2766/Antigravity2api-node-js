@@ -9,6 +9,7 @@ export class OpenAIProtocolEmitter extends BaseSseEmitter {
   constructor(res, options = {}) {
     super(res, options);
     this.toolCallIndex = 0;
+    this.includeUsage = options.includeUsage === true;
   }
 
   writeData(data) {
@@ -149,20 +150,39 @@ export class OpenAIProtocolEmitter extends BaseSseEmitter {
     this.finished = true;
 
     const finalUsage = this.buildUsage(usage);
+    const cachedTokens = usage?.prompt_tokens_details?.cached_tokens ?? usage?.cachedContentTokenCount ?? 0;
+    const reasoningTokens = usage?.completion_tokens_details?.reasoning_tokens ?? usage?.thoughtsTokenCount ?? 0;
 
-    this.writeData({
+    const payload = {
       ...this.buildChunkBase(),
       choices: [{
         index: 0,
         delta: {},
         finish_reason: finishReason
-      }],
-      usage: {
+      }]
+    };
+
+    if (this.includeUsage) {
+      payload.usage = {
         prompt_tokens: finalUsage.input_tokens,
         completion_tokens: finalUsage.output_tokens,
         total_tokens: finalUsage.input_tokens + finalUsage.output_tokens
+      };
+
+      if (cachedTokens > 0) {
+        payload.usage.prompt_tokens_details = {
+          cached_tokens: cachedTokens
+        };
       }
-    });
+
+      if (reasoningTokens > 0) {
+        payload.usage.completion_tokens_details = {
+          reasoning_tokens: reasoningTokens
+        };
+      }
+    }
+
+    this.writeData(payload);
 
     this.res.write('data: [DONE]\n\n');
     this.res.end();

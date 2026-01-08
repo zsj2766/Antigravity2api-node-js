@@ -115,7 +115,8 @@ export class GeminiToOpenAIResponseConverter extends IResponseConverter {
       : new OpenAIProtocolEmitter(resOrEmitter, {
           requestId: context.requestId || generateRequestId(),
           model: context.model || 'gemini-pro',
-          inputTokens: context.inputTokens || 0
+          inputTokens: context.inputTokens || 0,
+          includeUsage: context.includeUsage === true
         });
 
     // 追踪是否有工具调用
@@ -250,7 +251,9 @@ export class GeminiToOpenAIResponseConverter extends IResponseConverter {
     }
 
     const promptTokens = usageMetadata.promptTokenCount || usageMetadata.inputTokenCount || 0;
-    const completionTokens = usageMetadata.candidatesTokenCount || usageMetadata.outputTokenCount || 0;
+    const completionTokensBase = usageMetadata.candidatesTokenCount || usageMetadata.outputTokenCount || 0;
+    const reasoningTokens = usageMetadata.thoughtsTokenCount || 0;
+    const completionTokens = completionTokensBase + reasoningTokens;
     const cachedTokens = usageMetadata.cachedContentTokenCount || 0;
 
     const usage = {
@@ -263,6 +266,12 @@ export class GeminiToOpenAIResponseConverter extends IResponseConverter {
     if (cachedTokens > 0) {
       usage.prompt_tokens_details = {
         cached_tokens: cachedTokens
+      };
+    }
+
+    if (reasoningTokens > 0) {
+      usage.completion_tokens_details = {
+        reasoning_tokens: reasoningTokens
       };
     }
 

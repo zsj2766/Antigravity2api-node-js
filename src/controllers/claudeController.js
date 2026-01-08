@@ -81,7 +81,7 @@ async function handleClaudeStream(requestBody, token, res, requestId, model, inp
     for await (const { chunk, usage: u } of generateAssistantResponseStream(requestBody, token)) {
       lastChunk = chunk;
       if (u) usage = u;
-      processor.process(chunk);
+      await processor.process(chunk);
     }
   } catch (error) {
     streamError = error;
