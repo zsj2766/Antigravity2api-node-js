@@ -12,7 +12,8 @@ import {
   mergeConsecutiveRoles,
   normalizeThinkingBudget,
   shouldUseThinkingLevel,
-  ANTIGRAVITY_SYSTEM_PREFIX
+  ANTIGRAVITY_SYSTEM_PREFIX,
+  unpackThinkingText
 } from '../common/index.js';
 import { isThinkingModel, getThoughtSignature, getTextThoughtSignature, safeJsonParse } from '../../utils/utils.js';
 
@@ -181,23 +182,29 @@ export class ClaudeToGeminiRequestConverter extends IRequestConverter {
           break;
 
         case 'thinking':
-          // 保留 signature-only thinking 块（thinking 为空但有 signature）
-          if (block.thinking !== undefined || block.signature) {
+          // 按 CLIProxyAPI 策略：只保留有有效签名的 thinking 块
+          // 有效签名至少 50 字符长度
+          // 无效签名的 thinking 块直接丢弃，不转换为文本
+          // 解包 thinking 字段（可能是字符串、{text}、{thinking} 对象）
+          if (block.signature && block.signature.length >= 50) {
+            const thinkingText = unpackThinkingText(block.thinking);
             result.thinkingParts.push({
-              thinking: block.thinking ?? '',
+              thinking: thinkingText,
               signature: block.signature
             });
           }
           break;
 
         case 'redacted_thinking':
-          if (block.data) {
+          // block.data 就是签名，需要检查有效性（至少 50 字符）
+          if (block.data && block.data.length >= 50) {
             result.thinkingParts.push({
               thinking: '[redacted]',
               signature: block.data,
               redacted: true
             });
           }
+          // 无有效签名的 redacted_thinking 块直接丢弃
           break;
 
         case 'tool_use':
@@ -486,26 +493,22 @@ export class ClaudeToGeminiRequestConverter extends IRequestConverter {
     if (originalContent && Array.isArray(originalContent)) {
       parts = this.buildOrderedAssistantParts(originalContent, allowThoughtSignature);
     } else {
-      // 处理 thinking 块（包括 signature-only）
+      // 处理 thinking 块 - 按 CLIProxyAPI 策略只保留有效签名的块
       for (const thinkingBlock of parsed.thinkingParts) {
-        const hasThinkingText = thinkingBlock.thinking !== undefined && thinkingBlock.thinking !== '';
-        const hasSignature = Boolean(thinkingBlock.signature);
-        if (!hasThinkingText && !hasSignature) continue;
+        // 有效签名检查已在 convertContent 中完成，这里只需确认有签名
+        const hasValidSignature = thinkingBlock.signature && thinkingBlock.signature.length >= 50;
+        if (!hasValidSignature) continue;
 
-        // 有签名且模型支持 thoughtSignature：使用 Gemini thought 格式
-        if (hasSignature && allowThoughtSignature) {
+        // 有有效签名且模型支持 thoughtSignature：使用 Gemini thought 格式
+        if (allowThoughtSignature) {
+          // thinkingBlock.thinking 已经在 convertContent 中通过 unpackThinkingText 解包
           parts.push({
             thought: true,
-            text: thinkingBlock.thinking ?? '',
+            text: thinkingBlock.thinking || '',
             thoughtSignature: thinkingBlock.signature
           });
-        } else if (hasThinkingText) {
-          // 无签名或模型不支持：将 thinking 内容合并到文本中（用标签包裹以便区分）
-          // 这样即使无签名，模型也能看到之前的思考内容
-          parts.push({
-            text: `<thinking>${thinkingBlock.thinking}</thinking>`
-          });
         }
+        // 不支持 thoughtSignature 的模型，丢弃 thinking 块
       }
 
       // 处理文本内容
@@ -567,36 +570,34 @@ export class ClaudeToGeminiRequestConverter extends IRequestConverter {
 
       switch (block.type) {
         case 'thinking': {
-          // 处理 signature-only thinking 块
-          const hasThinkingText = block.thinking !== undefined && block.thinking !== '';
-          const hasSignature = Boolean(block.signature);
-          if (!hasThinkingText && !hasSignature) break;
+          // 按 CLIProxyAPI 策略：只保留有有效签名（>=50字符）的 thinking 块
+          // 无效签名的 thinking 块直接丢弃，不转换为 <thinking> 标签文本
+          const hasValidSignature = block.signature && block.signature.length >= 50;
+          if (!hasValidSignature) break;
 
-          if (hasSignature && allowThoughtSignature) {
+          if (allowThoughtSignature) {
+            // 解包 thinking 字段（可能是字符串、{text}、{thinking} 对象）
+            const thinkingText = unpackThinkingText(block.thinking);
             parts.push({
               thought: true,
-              text: block.thinking ?? '',
+              text: thinkingText,
               thoughtSignature: block.signature
             });
-          } else if (hasThinkingText) {
-            parts.push({ text: `<thinking>${block.thinking}</thinking>` });
           }
+          // 不支持 thoughtSignature 的情况下，有效签名的 thinking 块也丢弃（无法正确透传）
           break;
         }
 
         case 'redacted_thinking':
-          if (block.data) {
-            const redactedText = '[redacted]';
-            if (allowThoughtSignature) {
-              parts.push({
-                thought: true,
-                text: redactedText,
-                thoughtSignature: block.data
-              });
-            } else {
-              parts.push({ text: `<thinking>${redactedText}</thinking>` });
-            }
+          // block.data 就是签名，需要检查有效性（至少 50 字符）
+          if (block.data && block.data.length >= 50 && allowThoughtSignature) {
+            parts.push({
+              thought: true,
+              text: '[redacted]',
+              thoughtSignature: block.data
+            });
           }
+          // 无效签名或不支持 thoughtSignature 时直接丢弃
           break;
 
         case 'text':

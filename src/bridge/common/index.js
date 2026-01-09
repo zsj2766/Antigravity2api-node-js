@@ -48,5 +48,6 @@ export {
   countClaudeTokens,
   buildClaudeContentBlocks,
   convertToolCallsToClaudeBlocks,
-  extractTextFromClaudeMessages
+  extractTextFromClaudeMessages,
+  unpackThinkingText
 } from './claudeUtils.js';

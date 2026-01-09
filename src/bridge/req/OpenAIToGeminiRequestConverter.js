@@ -16,7 +16,8 @@ import {
   DATA_URL_REGEX,
   DOCUMENT_MIME_TYPES,
   AUDIO_FORMAT_MIME,
-  EXTENSION_MIME_MAP
+  EXTENSION_MIME_MAP,
+  unpackThinkingText
 } from '../common/index.js';
 import {
   getThoughtSignature,
@@ -208,29 +209,31 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
             }
           } else if (item.type === 'thinking') {
             // 非标准扩展：保留 thinking 内容（来自 ClaudeToOpenAI 透传）
-            if (item.thinking) {
-              const thinkingPart = { thought: true, text: item.thinking };
-              // 优先使用传入的 signature
-              if (item.signature) {
-                thinkingPart.thoughtSignature = item.signature;
-              } else {
-                // 否则尝试从缓存查找
-                const textSig = getTextThoughtSignature(item.thinking);
-                if (textSig?.signature) {
-                  thinkingPart.thoughtSignature = textSig.signature;
-                }
-              }
-              // 如果没有签名，包装在标签中以保留内容（降级处理）
-              if (!thinkingPart.thoughtSignature && forceThoughtSignature) {
-                thinkingPart.thoughtSignature = THOUGHT_SIGNATURE_SKIP;
-              }
-              if (!thinkingPart.thoughtSignature) {
-                // 移除 thought:true，因为没有签名时 Gemini 不接受 thought part
-                delete thinkingPart.thought;
-                thinkingPart.text = `<thinking>${item.thinking}</thinking>`;
-              }
-              parts.push(thinkingPart);
+            // 解包 thinking 字段（可能是字符串、{text}、{thinking} 对象）
+            const thinkingText = unpackThinkingText(item.thinking);
+            if (!thinkingText) {
+              // 空文本直接丢弃
+              continue;
             }
+
+            // 按 CLIProxyAPI 策略：只保留有有效签名（>=50字符）的 thinking 块
+            const hasValidSignature = item.signature && item.signature.length >= 50;
+
+            if (hasValidSignature) {
+              parts.push({
+                thought: true,
+                text: thinkingText,
+                thoughtSignature: item.signature
+              });
+            } else if (forceThoughtSignature) {
+              // Claude 模型启用 thinking 时，使用 skip sentinel 绕过签名验证
+              parts.push({
+                thought: true,
+                text: thinkingText,
+                thoughtSignature: THOUGHT_SIGNATURE_SKIP
+              });
+            }
+            // 无有效签名且非 forceThoughtSignature 模式的 thinking 块直接丢弃
           }
         }
       }
@@ -337,6 +340,15 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
     return typeof modelName === 'string' && modelName.includes('claude');
   }
 
+  /**
+   * 为工具调用添加 thoughtSignature（不注入假 thinking 块）
+   *
+   * 参考 CLIProxyAPI antigravity_claude_request.go:184-216:
+   * "Do NOT inject dummy thinking blocks here. Antigravity API validates signatures,
+   * so dummy values are rejected."
+   *
+   * 正确做法：只为 functionCall 部分添加 thoughtSignature 字段
+   */
   ensureThinkingPrefixForToolCalls(contents, modelName, enableThinking) {
     if (!this.shouldForceThoughtSignature(modelName, enableThinking)) {
       return;
@@ -347,19 +359,13 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
       if (!content || content.role !== 'model' || !Array.isArray(content.parts)) {
         continue;
       }
-      const hasToolCalls = content.parts.some(part => part && part.functionCall);
-      if (!hasToolCalls) continue;
 
-      const firstPart = content.parts[0];
-      if (firstPart && firstPart.thought === true) {
-        continue;
+      // 只为 functionCall 部分添加 thoughtSignature，不注入假 thinking 块
+      for (const part of content.parts) {
+        if (part && part.functionCall && !part.thoughtSignature) {
+          part.thoughtSignature = THOUGHT_SIGNATURE_SKIP;
+        }
       }
-
-      content.parts.unshift({
-        thought: true,
-        text: '',
-        thoughtSignature: THOUGHT_SIGNATURE_SKIP
-      });
     }
   }
 

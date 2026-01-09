@@ -6,7 +6,7 @@
  */
 
 import { IRequestConverter } from '../interfaces/IRequestConverter.js';
-import { generateToolCallId, resolveReasoningEffort } from '../common/index.js';
+import { generateToolCallId, resolveReasoningEffort, unpackThinkingText } from '../common/index.js';
 import { safeJsonStringify } from '../../utils/utils.js';
 
 export class ClaudeToOpenAIRequestConverter extends IRequestConverter {
@@ -180,19 +180,25 @@ export class ClaudeToOpenAIRequestConverter extends IRequestConverter {
           // 非标准扩展：保留 thinking 块供后续链路使用
           // - 标准 OpenAI API 会忽略未知字段，不影响正常请求
           // - OpenAIToGemini 支持此扩展，可正确转换为 Gemini thoughtSignature
-          if (block.thinking) {
+          // 注意：按 CLIProxyAPI 策略，没有有效签名的 thinking 块应该被丢弃
+          // 有效签名至少 50 字符长度
+          // 解包 thinking 字段（可能是字符串、{text}、{thinking} 对象）
+          const thinkingText = unpackThinkingText(block.thinking);
+          if (thinkingText && block.signature && block.signature.length >= 50) {
             hasThinking = true;
             parts.push({
               type: 'thinking',
-              thinking: block.thinking,
+              thinking: thinkingText,
               signature: block.signature
             });
           }
+          // 无有效签名或空文本的 thinking 块直接丢弃，不转换为文本
           break;
 
         case 'redacted_thinking':
           // 非标准扩展：保留 redacted_thinking 块
-          if (block.data) {
+          // block.data 就是签名，需要检查有效性（至少 50 字符）
+          if (block.data && block.data.length >= 50) {
             hasThinking = true;
             parts.push({
               type: 'thinking',
@@ -201,6 +207,7 @@ export class ClaudeToOpenAIRequestConverter extends IRequestConverter {
               redacted: true
             });
           }
+          // 无有效签名的 redacted_thinking 块直接丢弃
           break;
 
         case 'tool_use':

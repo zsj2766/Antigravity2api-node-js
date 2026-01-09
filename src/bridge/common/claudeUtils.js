@@ -7,6 +7,34 @@
 import { estimateTokens, generateToolUseId } from './idUtils.js';
 
 /**
+ * 解包 thinking 字段为纯文本字符串
+ *
+ * 处理三种格式：
+ * 1. string → 直接返回
+ * 2. { text: "..." } → 返回 text 字段
+ * 3. { thinking: "..." } → 返回 thinking 字段
+ *
+ * @param {string|object} thinking - thinking 字段（可能是字符串或对象）
+ * @returns {string} 解包后的文本，空值返回空字符串
+ */
+export function unpackThinkingText(thinking) {
+  if (typeof thinking === 'string') {
+    return thinking;
+  }
+  if (thinking && typeof thinking === 'object') {
+    // 优先使用 text 字段
+    if (typeof thinking.text === 'string') {
+      return thinking.text;
+    }
+    // 次选 thinking 字段（嵌套格式）
+    if (typeof thinking.thinking === 'string') {
+      return thinking.thinking;
+    }
+  }
+  return '';
+}
+
+/**
  * 安全解析 JSON
  * @param {string|object} str - JSON 字符串或对象
  * @param {*} fallback - 解析失败时的默认值
