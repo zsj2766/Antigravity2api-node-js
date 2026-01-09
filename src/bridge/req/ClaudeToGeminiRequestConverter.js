@@ -21,6 +21,9 @@ import { isThinkingModel, getThoughtSignature, getTextThoughtSignature, safeJson
 // 原因：全局正则替换会误删用户讨论 XML 或工具调用格式的正常文本内容
 // Bridge 层不应擅自修改用户输入
 
+// 与 CLIProxyAPI 保持一致：用于绕过后端签名验证的特殊值
+const THOUGHT_SIGNATURE_SKIP = 'skip_thought_signature_validator';
+
 export class ClaudeToGeminiRequestConverter extends IRequestConverter {
   /**
    * 主入口：转换完整请求体
@@ -535,6 +538,9 @@ export class ClaudeToGeminiRequestConverter extends IRequestConverter {
         };
         if (thoughtSignature) {
           part.thoughtSignature = thoughtSignature;
+        } else {
+          // 与 CLIProxyAPI 保持一致：缓存未命中时使用 SKIP 绕过验证
+          part.thoughtSignature = THOUGHT_SIGNATURE_SKIP;
         }
         parts.push(part);
       }
@@ -624,6 +630,9 @@ export class ClaudeToGeminiRequestConverter extends IRequestConverter {
           const thoughtSignature = getThoughtSignature(id);
           if (thoughtSignature) {
             part.thoughtSignature = thoughtSignature;
+          } else {
+            // 与 CLIProxyAPI 保持一致：缓存未命中时使用 SKIP 绕过验证
+            part.thoughtSignature = THOUGHT_SIGNATURE_SKIP;
           }
           parts.push(part);
           break;
@@ -900,6 +909,9 @@ export class ClaudeToGeminiRequestConverter extends IRequestConverter {
         const thoughtSignature = getThoughtSignature(id);
         if (thoughtSignature) {
           part.thoughtSignature = thoughtSignature;
+        } else {
+          // 与 CLIProxyAPI 保持一致：缓存未命中时使用 SKIP 绕过验证
+          part.thoughtSignature = THOUGHT_SIGNATURE_SKIP;
         }
 
         return part;
