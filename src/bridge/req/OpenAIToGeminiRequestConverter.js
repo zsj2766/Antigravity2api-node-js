@@ -174,7 +174,10 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
   /**
    * 构建助手消息的 parts (OpenAI → Gemini)
    *
-   * 注意：会尝试附加 thoughtSignature
+   * 关键优化（与 CLIProxyAPI 保持一致）：
+   * - 实现消息级签名传播 (currentMessageThinkingSignature)
+   * - 当一个 assistant 消息中有有效签名的文本时，其签名会传递给同一消息中的后续 tool_calls
+   * - 参考：CLIProxyAPI antigravity_claude_request.go:150-152, 211-216
    *
    * @param {object} message - OpenAI assistant 消息
    * @param {string} modelName - 模型名称
@@ -183,6 +186,9 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
    */
   buildAssistantParts(message, modelName = '', enableThinking = false) {
     const parts = [];
+    // 消息级签名传播：记录当前消息中有效的签名
+    // 用于传递给同一消息中后续的 tool_calls（与 CLIProxyAPI 的 currentMessageThinkingSignature 一致）
+    let currentMessageThinkingSignature = null;
 
     // 处理内容数组 (只处理 text 和 image_url，与 CLIProxyAPI 保持一致)
     if (message.content) {
@@ -191,6 +197,8 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
         const textThoughtSignature = getTextThoughtSignature(message.content);
         if (textThoughtSignature?.signature) {
           textPart.thoughtSignature = textThoughtSignature.signature;
+          // 记录签名用于后续 tool_calls
+          currentMessageThinkingSignature = textThoughtSignature.signature;
         }
         parts.push(textPart);
       } else if (Array.isArray(message.content)) {
@@ -203,6 +211,10 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
               const textThoughtSignature = getTextThoughtSignature(item.text);
               if (textThoughtSignature?.signature) {
                 textPart.thoughtSignature = textThoughtSignature.signature;
+                // 记录签名用于后续 tool_calls
+                if (!currentMessageThinkingSignature) {
+                  currentMessageThinkingSignature = textThoughtSignature.signature;
+                }
               }
               parts.push(textPart);
             }
@@ -236,10 +248,16 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
           }
         };
 
-        // 获取工具调用的 thoughtSignature（与 CLIProxyAPI 保持一致：无条件添加）
-        const signature = getThoughtSignature(toolCall.id);
-        if (signature) {
-          part.thoughtSignature = signature;
+        // 签名优先级（与 CLIProxyAPI 保持一致）：
+        // 1. 缓存中的签名（之前响应记录的）
+        // 2. 当前消息中的签名（消息级传播）
+        // 3. SKIP 绕过验证
+        const cachedSignature = getThoughtSignature(toolCall.id);
+        if (cachedSignature) {
+          part.thoughtSignature = cachedSignature;
+        } else if (currentMessageThinkingSignature) {
+          // 消息级签名传播：使用当前消息中文本块的签名
+          part.thoughtSignature = currentMessageThinkingSignature;
         } else {
           // CLIProxyAPI 无条件为所有 functionCall 添加 thoughtSignature
           part.thoughtSignature = THOUGHT_SIGNATURE_SKIP;

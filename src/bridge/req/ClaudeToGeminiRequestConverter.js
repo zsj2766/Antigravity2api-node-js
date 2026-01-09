@@ -496,11 +496,17 @@ export class ClaudeToGeminiRequestConverter extends IRequestConverter {
     if (originalContent && Array.isArray(originalContent)) {
       parts = this.buildOrderedAssistantParts(originalContent, allowThoughtSignature);
     } else {
+      // 消息级签名传播：记录当前消息中有效的 thinking 签名
+      let currentMessageThinkingSignature = null;
+
       // 处理 thinking 块 - 按 CLIProxyAPI 策略只保留有效签名的块
       for (const thinkingBlock of parsed.thinkingParts) {
         // 有效签名检查已在 convertContent 中完成，这里只需确认有签名
         const hasValidSignature = thinkingBlock.signature && thinkingBlock.signature.length >= 50;
         if (!hasValidSignature) continue;
+
+        // 记录有效签名，用于传递给后续的 tool_use
+        currentMessageThinkingSignature = thinkingBlock.signature;
 
         // 有有效签名且模型支持 thoughtSignature：使用 Gemini thought 格式
         if (allowThoughtSignature) {
@@ -522,13 +528,17 @@ export class ClaudeToGeminiRequestConverter extends IRequestConverter {
         const textPart = { text: textThoughtSignature?.text ?? contentText };
         if (allowThoughtSignature && textThoughtSignature?.signature) {
           textPart.thoughtSignature = textThoughtSignature.signature;
+          // 文本签名也可以传播给后续 tool_use
+          if (!currentMessageThinkingSignature) {
+            currentMessageThinkingSignature = textThoughtSignature.signature;
+          }
         }
         parts.push(textPart);
       }
 
       // 处理 tool_use
       for (const toolCall of parsed.toolCalls) {
-        const thoughtSignature = getThoughtSignature(toolCall.id);
+        const cachedSignature = getThoughtSignature(toolCall.id);
         const part = {
           functionCall: {
             id: toolCall.id,
@@ -536,8 +546,14 @@ export class ClaudeToGeminiRequestConverter extends IRequestConverter {
             args: typeof toolCall.input === 'string' ? safeJsonParse(toolCall.input) : toolCall.input
           }
         };
-        if (thoughtSignature) {
-          part.thoughtSignature = thoughtSignature;
+        // 签名优先级（与 CLIProxyAPI 保持一致）：
+        // 1. 缓存中的签名
+        // 2. 当前消息中的 thinking 签名（消息级传播）
+        // 3. SKIP 绕过验证
+        if (cachedSignature) {
+          part.thoughtSignature = cachedSignature;
+        } else if (currentMessageThinkingSignature) {
+          part.thoughtSignature = currentMessageThinkingSignature;
         } else {
           // 与 CLIProxyAPI 保持一致：缓存未命中时使用 SKIP 绕过验证
           part.thoughtSignature = THOUGHT_SIGNATURE_SKIP;
@@ -564,12 +580,20 @@ export class ClaudeToGeminiRequestConverter extends IRequestConverter {
   /**
    * 按原始顺序构建 assistant 消息（保持所有内容类型的交错顺序）
    *
+   * 关键优化（与 CLIProxyAPI 保持一致）：
+   * - 实现消息级签名传播 (currentMessageThinkingSignature)
+   * - 当一个 assistant 消息中有有效的 thinking 块时，其签名会传递给同一消息中的后续 tool_use
+   * - 参考：CLIProxyAPI antigravity_claude_request.go:150-152, 211-216
+   *
    * @param {Array} originalContent - Claude 原始内容数组
    * @param {boolean} allowThoughtSignature - 是否允许 thoughtSignature
    * @returns {Array} Gemini parts 数组
    */
   buildOrderedAssistantParts(originalContent, allowThoughtSignature) {
     const parts = [];
+    // 消息级签名传播：记录当前消息中有效的 thinking 签名
+    // 用于传递给同一消息中后续的 tool_use（与 CLIProxyAPI 的 currentMessageThinkingSignature 一致）
+    let currentMessageThinkingSignature = null;
 
     for (const block of originalContent) {
       if (!block || typeof block !== 'object') continue;
@@ -580,6 +604,9 @@ export class ClaudeToGeminiRequestConverter extends IRequestConverter {
           // 无效签名的 thinking 块直接丢弃，不转换为 <thinking> 标签文本
           const hasValidSignature = block.signature && block.signature.length >= 50;
           if (!hasValidSignature) break;
+
+          // 记录有效签名，用于传递给后续的 tool_use（消息级签名传播）
+          currentMessageThinkingSignature = block.signature;
 
           if (allowThoughtSignature) {
             // 解包 thinking 字段（可能是字符串、{text}、{thinking} 对象）
@@ -596,12 +623,17 @@ export class ClaudeToGeminiRequestConverter extends IRequestConverter {
 
         case 'redacted_thinking':
           // block.data 就是签名，需要检查有效性（至少 50 字符）
-          if (block.data && block.data.length >= 50 && allowThoughtSignature) {
-            parts.push({
-              thought: true,
-              text: '[redacted]',
-              thoughtSignature: block.data
-            });
+          if (block.data && block.data.length >= 50) {
+            // 记录有效签名，用于传递给后续的 tool_use（消息级签名传播）
+            currentMessageThinkingSignature = block.data;
+
+            if (allowThoughtSignature) {
+              parts.push({
+                thought: true,
+                text: '[redacted]',
+                thoughtSignature: block.data
+              });
+            }
           }
           // 无效签名或不支持 thoughtSignature 时直接丢弃
           break;
@@ -612,6 +644,10 @@ export class ClaudeToGeminiRequestConverter extends IRequestConverter {
             const textPart = { text: textThoughtSignature?.text ?? block.text };
             if (allowThoughtSignature && textThoughtSignature?.signature) {
               textPart.thoughtSignature = textThoughtSignature.signature;
+              // 文本签名也可以传播给后续 tool_use
+              if (!currentMessageThinkingSignature) {
+                currentMessageThinkingSignature = textThoughtSignature.signature;
+              }
             }
             parts.push(textPart);
           }
@@ -627,9 +663,16 @@ export class ClaudeToGeminiRequestConverter extends IRequestConverter {
               args
             }
           };
-          const thoughtSignature = getThoughtSignature(id);
-          if (thoughtSignature) {
-            part.thoughtSignature = thoughtSignature;
+          // 签名优先级（与 CLIProxyAPI 保持一致）：
+          // 1. 缓存中的签名（之前响应记录的）
+          // 2. 当前消息中的 thinking 签名（消息级传播）
+          // 3. SKIP 绕过验证
+          const cachedSignature = getThoughtSignature(id);
+          if (cachedSignature) {
+            part.thoughtSignature = cachedSignature;
+          } else if (currentMessageThinkingSignature) {
+            // 消息级签名传播：使用当前消息中 thinking 块的签名
+            part.thoughtSignature = currentMessageThinkingSignature;
           } else {
             // 与 CLIProxyAPI 保持一致：缓存未命中时使用 SKIP 绕过验证
             part.thoughtSignature = THOUGHT_SIGNATURE_SKIP;
