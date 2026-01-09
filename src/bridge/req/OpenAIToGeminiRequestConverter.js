@@ -341,13 +341,12 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
   }
 
   /**
-   * 为工具调用添加 thoughtSignature（不注入假 thinking 块）
+   * 确保带工具调用的 assistant 消息以 thinking 块开头
    *
-   * 参考 CLIProxyAPI antigravity_claude_request.go:184-216:
-   * "Do NOT inject dummy thinking blocks here. Antigravity API validates signatures,
-   * so dummy values are rejected."
+   * Claude API 规则：当 thinking 启用时，assistant 消息必须以 thinking 块开头
+   * （在 tool_use 块之前）。否则返回 400 错误。
    *
-   * 正确做法：只为 functionCall 部分添加 thoughtSignature 字段
+   * 使用 skip_thought_signature_validator sentinel 绕过签名验证。
    */
   ensureThinkingPrefixForToolCalls(contents, modelName, enableThinking) {
     if (!this.shouldForceThoughtSignature(modelName, enableThinking)) {
@@ -360,12 +359,22 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
         continue;
       }
 
-      // 只为 functionCall 部分添加 thoughtSignature，不注入假 thinking 块
-      for (const part of content.parts) {
-        if (part && part.functionCall && !part.thoughtSignature) {
-          part.thoughtSignature = THOUGHT_SIGNATURE_SKIP;
-        }
+      const hasToolCalls = content.parts.some(part => part && part.functionCall);
+      if (!hasToolCalls) continue;
+
+      // 检查第一个 part 是否已经是 thinking 块
+      const firstPart = content.parts[0];
+      if (firstPart && firstPart.thought === true) {
+        continue;
       }
+
+      // 必须在 functionCall 之前注入 thinking 块，否则 Claude 拒绝请求
+      // 使用空文本避免注入额外 token
+      content.parts.unshift({
+        thought: true,
+        text: '',
+        thoughtSignature: THOUGHT_SIGNATURE_SKIP
+      });
     }
   }
 
