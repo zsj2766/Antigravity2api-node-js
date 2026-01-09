@@ -325,23 +325,29 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
   /**
    * 判断是否启用 thinking 模式
    *
-   * 与 CLIProxyAPI 保持一致：只有显式配置 reasoning 时才启用 thinking，
-   * 不根据模型名自动启用（避免历史消息无 thinking 块时触发 Claude 验证错误）
+   * 与 CLIProxyAPI 保持一致：只检查顶级 reasoning_effort 字段
+   *
+   * 关键发现：CLIProxyAPI 在 antigravity_openai_request.go:40-41 中：
+   *   re := gjson.GetBytes(rawJSON, "reasoning_effort")
+   *   hasOfficialThinking := re.Exists()
+   *
+   * 它只检查 "reasoning_effort" 顶级字段，不处理 "reasoning.effort" 嵌套对象。
+   * 这是因为 Claude Code CLI 发送的请求格式是 reasoning: { effort, enabled }，
+   * 但这种格式在 Gemini 转 Claude 的场景下会导致问题：
+   * - 历史消息中没有 thinking 块
+   * - 但我们启用了 thinking 模式
+   * - Claude API 要求 thinking 模式下 assistant 消息必须以 thinking 块开头
+   *
+   * 解决方案：与 CLIProxyAPI 一致，只处理顶级 reasoning_effort 字段
    */
   resolveThinkingEnabled(parameters = {}, modelName = '') {
-    const reasoning = parameters?.reasoning;
-    if (reasoning && typeof reasoning === 'object' && reasoning.enabled === false) {
-      return false;
-    }
-    const effort = reasoning && typeof reasoning === 'object' ? reasoning.effort : null;
-    if (effort || parameters?.reasoning_effort) {
+    // 与 CLIProxyAPI 完全一致：只检查顶级 reasoning_effort 字段
+    // 不处理 reasoning.effort 嵌套对象（因为历史消息可能没有 thinking 块）
+    if (typeof parameters?.reasoning_effort === 'string') {
       return true;
     }
-    if (reasoning && typeof reasoning === 'object' && reasoning.enabled === true) {
-      return true;
-    }
-    // 不根据模型名自动启用 thinking（与 CLIProxyAPI 一致）
-    // 原因：如果历史消息没有 thinking 块，自动启用会导致 Claude 报错
+    // 不检查 reasoning.effort 或 reasoning.enabled
+    // 不根据模型名自动启用 thinking
     return false;
   }
 
@@ -817,15 +823,11 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
     }
 
     // 处理 reasoning effort -> thinking config
-    // 支持两种格式：
-    // 1. reasoning: { effort: 'low'|'medium'|'high' } (OpenAI 结构化格式)
-    // 2. reasoning_effort: 'low'|'medium'|'high' (OpenAI 简化格式)
-    let effort = null;
-    if (parameters.reasoning && typeof parameters.reasoning === 'object') {
-      effort = parameters.reasoning.effort;
-    } else if (typeof parameters.reasoning_effort === 'string') {
-      effort = parameters.reasoning_effort;
-    }
+    // 与 CLIProxyAPI 保持一致：只处理顶级 reasoning_effort 字段
+    // 不处理 reasoning.effort 嵌套对象（避免历史消息无 thinking 块导致 Claude 报错）
+    const effort = typeof parameters.reasoning_effort === 'string'
+      ? parameters.reasoning_effort
+      : null;
 
     if (effort) {
       // 判断是否使用 thinkingLevel（Gemini 3 系列）还是 thinkingBudget
