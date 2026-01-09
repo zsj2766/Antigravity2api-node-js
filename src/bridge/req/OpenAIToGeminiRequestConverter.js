@@ -74,6 +74,16 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
       generationConfig: this.buildGenerationConfig(parameters, modelName)
     };
 
+    // 安全检查：如果历史消息中存在只有 functionCall 没有 thinking 块的 model 消息，
+    // 则禁用 thinking 模式，避免 Claude API 拒绝请求
+    // 参考错误："Expected thinking or redacted_thinking, but found tool_use"
+    if (enableThinking && requestBody.generationConfig?.thinkingConfig) {
+      const hasOrphanToolCalls = this.hasAssistantMessageWithOnlyToolCalls(mergedContents);
+      if (hasOrphanToolCalls) {
+        delete requestBody.generationConfig.thinkingConfig;
+      }
+    }
+
     if (finalSystemInstruction) {
       requestBody.systemInstruction = { parts: [{ text: finalSystemInstruction }] };
     }
@@ -404,6 +414,39 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
         }
       }
     }
+  }
+
+  /**
+   * 检测是否存在只有 functionCall 没有 thinking 块的 model 消息
+   *
+   * 当 thinking 模式启用时，Claude API 要求 assistant 消息以 thinking 块开头。
+   * 如果历史消息中存在只有 tool_calls（functionCall）的 assistant 消息，
+   * 则不应启用 thinking 模式，否则 Claude API 会拒绝请求。
+   *
+   * @param {Array} contents - Gemini contents 数组
+   * @returns {boolean} 是否存在只有 functionCall 的 model 消息
+   */
+  hasAssistantMessageWithOnlyToolCalls(contents) {
+    if (!Array.isArray(contents)) return false;
+
+    for (const content of contents) {
+      if (!content || content.role !== 'model' || !Array.isArray(content.parts)) {
+        continue;
+      }
+
+      // 检查是否有 functionCall
+      const hasFunctionCall = content.parts.some(part => part?.functionCall);
+      if (!hasFunctionCall) continue;
+
+      // 检查是否有 thinking 块（thought: true）
+      const hasThinking = content.parts.some(part => part?.thought === true);
+      if (!hasThinking) {
+        // 存在只有 functionCall 没有 thinking 的 model 消息
+        return true;
+      }
+    }
+
+    return false;
   }
 
   /**
