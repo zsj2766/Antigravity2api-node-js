@@ -62,7 +62,8 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
     // 确保消息角色交替（Gemini 强制要求 User/Model 交替）
     const mergedContents = mergeConsecutiveRoles(contents);
     // 与 CLIProxyAPI 保持一致：无条件为 functionCall/inlineData 添加 thoughtSignature
-    this.ensureThinkingPrefixForToolCalls(mergedContents);
+    // 同时，当 thinking 启用时，为带 tool_calls 的 assistant 消息注入 thinking 块
+    this.ensureThinkingPrefixForToolCalls(mergedContents, modelName, enableThinking);
     if (mergedContents.length === 0) {
       mergedContents.push({ role: 'user', parts: [{ text: '' }] });
     } else if (mergedContents[0].role !== 'user') {
@@ -403,13 +404,18 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
   }
 
   /**
-   * 为工具调用添加 thoughtSignature（不注入 thinking 块）
+   * 为工具调用添加 thoughtSignature，并在需要时注入 thinking 块
    *
-   * 与 CLIProxyAPI 保持一致：无条件为 functionCall 和 inlineData 添加 thoughtSignature，
-   * 不注入假的 thinking 块（避免 Gemini→Claude 转换时格式错误）
+   * 与 CLIProxyAPI 保持一致：无条件为 functionCall 和 inlineData 添加 thoughtSignature。
+   *
+   * 同时，当 thinking 启用且模型需要时（如 Claude），在带 tool_calls 的 assistant 消息
+   * 前面注入 thinking 块，否则 Claude API 会返回 400 错误：
+   * "Expected thinking, but found tool_use"
    */
-  ensureThinkingPrefixForToolCalls(contents) {
+  ensureThinkingPrefixForToolCalls(contents, modelName, enableThinking) {
     if (!Array.isArray(contents)) return;
+
+    const shouldInjectThinking = this.shouldForceThoughtSignature(modelName, enableThinking);
 
     for (const content of contents) {
       if (!content || content.role !== 'model' || !Array.isArray(content.parts)) {
@@ -421,6 +427,26 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
         if (part && (part.functionCall || part.inlineData) && !part.thoughtSignature) {
           part.thoughtSignature = THOUGHT_SIGNATURE_SKIP;
         }
+      }
+
+      // 当 thinking 启用时，为带 tool_calls 的消息注入 thinking 块
+      if (shouldInjectThinking) {
+        const hasToolCalls = content.parts.some(part => part && part.functionCall);
+        if (!hasToolCalls) continue;
+
+        // 检查第一个 part 是否已经是 thinking 块
+        const firstPart = content.parts[0];
+        if (firstPart && firstPart.thought === true) {
+          continue;
+        }
+
+        // 必须在 functionCall 之前注入 thinking 块，否则 Claude 拒绝请求
+        // 使用空文本避免注入额外 token
+        content.parts.unshift({
+          thought: true,
+          text: '',
+          thoughtSignature: THOUGHT_SIGNATURE_SKIP
+        });
       }
     }
   }
