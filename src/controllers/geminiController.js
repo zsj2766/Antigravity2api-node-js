@@ -67,6 +67,8 @@ export async function handleGeminiGenerateContent(req, res) {
   });
 
   const body = req.body || {};
+  if (!res.locals) res.locals = {};
+  res.locals.streamMode = false;
   applyImageSizeToBody(body, imageSizeFromModel);
 
   if (!Array.isArray(body.contents) || body.contents.length === 0) {
@@ -163,6 +165,8 @@ export async function handleGeminiStreamGenerateContent(req, res) {
   });
 
   const body = req.body || {};
+  if (!res.locals) res.locals = {};
+  res.locals.streamMode = true;
 
   if (!Array.isArray(body.contents) || body.contents.length === 0) {
     const status = 400;

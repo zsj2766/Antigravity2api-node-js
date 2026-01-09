@@ -816,7 +816,7 @@ function initLogSettingsUI() {
   label.appendChild(select);
   actions.appendChild(label);
 
-  logsHeader.removeChild(logsRefreshBtn);
+  logsRefreshBtn.remove();
   actions.appendChild(logsRefreshBtn);
   logsHeader.appendChild(actions);
 

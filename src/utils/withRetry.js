@@ -38,6 +38,7 @@ export async function withRetry({
 }) {
   const maxAttempts = config.retry?.maxAttempts || 3;
   const retryStatusCodes = config.retry?.statusCodes || [429, 500];
+  const streamMaxDelayMs = 500;
 
   let attempt = 0;
   let retryCount = 0;
@@ -105,12 +106,14 @@ export async function withRetry({
 
       const errorStatusInt = extractErrorStatus(error);
       const isCapacityExhausted = error.code === 'CAPACITY_EXHAUSTED';
+      const isStreamMode = res.locals?.streamMode === true;
 
       const currentToken = retryingToken || lastToken || await resolveToken(req, excludedTokenIds).catch(() => null);
 
       // 容量不足：延迟后重试当前凭证一次（不计入冷却）
       if (isCapacityExhausted && !retriedCapacity) {
-        const delay = calculateRetryDelay(attempt, error);
+        const rawDelay = calculateRetryDelay(attempt, error);
+        const delay = isStreamMode ? Math.min(rawDelay, streamMaxDelayMs) : rawDelay;
         logger.warn(`模型容量不足，等待 ${Math.round(delay)}ms 后重试...`);
 
         if (onRetry) {
@@ -130,7 +133,8 @@ export async function withRetry({
       if (!isCapacityExhausted && currentToken && errorStatusInt === 429) {
         const tokenKey = tokenManager.getTokenKey(currentToken);
         if (!retried429Tokens.has(tokenKey)) {
-          const delay = calculateRetryDelay(attempt, error);
+          const rawDelay = calculateRetryDelay(attempt, error);
+          const delay = isStreamMode ? Math.min(rawDelay, streamMaxDelayMs) : rawDelay;
           logger.warn(`凭证 ${tokenKey} 遇到 429，等待 ${Math.round(delay)}ms 后重试当前凭证...`);
 
           if (onRetry) {

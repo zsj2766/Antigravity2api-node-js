@@ -64,7 +64,15 @@ export function handleCountTokens(req, res) {
  * 使用 try/finally 确保异常时也能正确收尾，避免客户端看不到 message_delta + message_stop 事件
  */
 async function handleClaudeStream(requestBody, token, res, requestId, model, inputTokens) {
+  // 初始化流状态标志：用于 withRetry 判断是否可重试
+  res.locals = res.locals || {};
+  res.locals.streamBodySent = false;
+
   setStreamHeaders(res);
+
+  // headers 发送后，标记流体已开始
+  res.locals.streamBodySent = true;
+
   const converter = new GeminiToClaudeResponseConverter();
   const processor = converter.createStreamProcessor(res, {
     requestId,
@@ -217,6 +225,8 @@ export async function handleClaudeMessages(req, res) {
   })();
 
   const isStream = claudeBody.stream === true;
+  if (!res.locals) res.locals = {};
+  res.locals.streamMode = isStream;
   let retryCountForLog = 0;
 
   try {
@@ -276,6 +286,10 @@ export async function handleClaudeMessages(req, res) {
         isRetry: retryCount > 0,
         retryCount
       });
+      // 确保响应被正确关闭
+      if (!res.writableEnded) {
+        res.end();
+      }
       return;
     }
 

@@ -41,7 +41,14 @@ import { saveBase64Image } from '../utils/imageStorage.js';
  * 使用 try/finally 确保异常时也能正确收尾，避免客户端看不到完整的 SSE 事件
  */
 async function handleChatStream(requestBody, token, res, id, model, streamEventsForLog, includeUsage) {
+  // 初始化流状态标志：用于 withRetry 判断是否可重试
+  res.locals = res.locals || {};
+  res.locals.streamBodySent = false;
+
   setStreamHeaders(res);
+
+  // headers 发送后，标记流体已开始
+  res.locals.streamBodySent = true;
   const converter = new GeminiToOpenAIResponseConverter();
   const processor = converter.createStreamProcessor(res, {
     requestId: id,
@@ -148,6 +155,9 @@ function sendErrorResponse(res, error, stream, model, retryCount) {
 
   if (stream) {
     setStreamHeaders(res);
+
+  // headers 发送后，标记流体已开始
+  res.locals.streamBodySent = true;
     writeStreamData(res, createStreamChunk(id, created, model || 'unknown', { role: 'assistant', content: '' }));
     writeStreamData(res, createStreamChunk(id, created, model || 'unknown', { content: errorContent }));
     endStream(res, id, created, model || 'unknown', 'stop');
@@ -180,6 +190,8 @@ export const createChatCompletionHandler = (resolveToken, options = {}) => async
   const startedAt = Date.now();
   const correlationId = req.headers['x-correlation-id'] || req.headers['x-request-id'] || crypto.randomUUID();
   const requestSnapshot = createRequestSnapshot(req);
+  if (!res.locals) res.locals = {};
+  res.locals.streamMode = stream === true;
 
   const { writeLog, setToken } = createLogWriter({
     req, res, startedAt, requestSnapshot, correlationId, model
@@ -270,6 +282,10 @@ export const createChatCompletionHandler = (resolveToken, options = {}) => async
         isRetry: retryCount > 0,
         retryCount
       });
+      // 确保响应被正确关闭
+      if (!res.writableEnded) {
+        res.end();
+      }
       return;
     }
 
