@@ -33,8 +33,6 @@ const nextPageBtn = document.getElementById('nextPageBtn');
 const logPaginationInfo = document.getElementById('logPaginationInfo');
 const logPrevPageBtn = document.getElementById('logPrevPageBtn');
 const logNextPageBtn = document.getElementById('logNextPageBtn');
-const statusFilterSelect = document.getElementById('statusFilter');
-const errorFilterCheckbox = document.getElementById('errorFilter');
 const themeToggleBtn = document.getElementById('themeToggleBtn');
 
 const HOUR_WINDOW_MINUTES = 60;
@@ -234,10 +232,24 @@ function renderUsageCard(account) {
         <div class="score-badge ${rateClass}" data-tooltip="基于本次运行数据计算\n成功数 / (成功数 + 失败数) × 100%">成功率: ${successRate}%</div>
         ${cooldownHtml}
       </div>
-      <div class="usage-row" data-tooltip="服务启动后的统计，重启后清零\n用于计算成功率和负载均衡"><span>本次运行</span><strong>✅${stats.successCount} / ❌${stats.failureCount}</strong></div>
-      <div class="usage-row" data-tooltip="从日志文件统计的历史数据\n受日志保留策略影响（默认保留 7 天）"><span>历史统计</span><strong>${usage.total || 0} 次 (成功 ${usage.success || 0} / 失败 ${usage.failed || 0})</strong></div>
-      <div class="usage-row"><span>最近使用</span><strong>${lastUsed}</strong></div>
-      <div class="usage-row"><span>使用过的模型</span><strong>${models}</strong></div>
+      <div class="usage-grid">
+        <div class="usage-cell" data-tooltip="服务启动后的统计，重启后清零\n用于计算成功率和负载均衡">
+          <span>本次运行</span>
+          <strong>✅${stats.successCount} / ❌${stats.failureCount}</strong>
+        </div>
+        <div class="usage-cell" data-tooltip="从日志文件统计的历史数据\n受日志保留策略影响（默认保留 7 天）">
+          <span>历史统计</span>
+          <strong>${usage.total || 0} 次 (成功 ${usage.success || 0} / 失败 ${usage.failed || 0})</strong>
+        </div>
+        <div class="usage-cell">
+          <span>最近使用</span>
+          <strong>${lastUsed}</strong>
+        </div>
+        <div class="usage-cell">
+          <span>使用过的模型</span>
+          <strong>${models}</strong>
+        </div>
+      </div>
     </div>
   `;
 }
@@ -278,120 +290,7 @@ async function refreshAllAccountsBatch() {
   }
 }
 
-function bindAccountActions() {
-  document.querySelectorAll('[data-action="refresh"]')?.forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const idx = btn.dataset.index;
-      btn.disabled = true;
-      setStatus('正在刷新凭证...', 'info', manageStatusEl);
-      try {
-        await fetchJson(`/auth/accounts/${idx}/refresh`, { method: 'POST' });
-        setStatus('刷新成功', 'success', manageStatusEl);
-        refreshAccounts();
-      } catch (e) {
-        setStatus('刷新失败: ' + e.message, 'error', manageStatusEl);
-      } finally {
-        btn.disabled = false;
-      }
-    });
-  });
-
-  document.querySelectorAll('[data-action="toggle"]')?.forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const idx = btn.dataset.index;
-      const enable = btn.dataset.enable === 'false';
-      btn.disabled = true;
-      setStatus(enable ? '正在启用账号...' : '正在停用账号...', 'info', manageStatusEl);
-      try {
-        await fetchJson(`/auth/accounts/${idx}/enable`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ enable })
-        });
-        setStatus(enable ? '已启用账号' : '已停用账号', 'success', manageStatusEl);
-        refreshAccounts();
-      } catch (e) {
-        setStatus('更新状态失败: ' + e.message, 'error', manageStatusEl);
-      } finally {
-        btn.disabled = false;
-      }
-    });
-  });
-
-  document.querySelectorAll('[data-action="delete"]')?.forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const idx = btn.dataset.index;
-      if (!confirm('确认删除这个账号吗？删除后无法恢复')) return;
-      btn.disabled = true;
-      setStatus('正在删除账号...', 'info', manageStatusEl);
-      try {
-        await fetchJson(`/auth/accounts/${idx}`, { method: 'DELETE' });
-        setStatus('账号已删除', 'success', manageStatusEl);
-        refreshAccounts();
-      } catch (e) {
-        setStatus('删除失败: ' + e.message, 'error', manageStatusEl);
-      } finally {
-        btn.disabled = false;
-      }
-    });
-  });
-
-  document.querySelectorAll('[data-action="reauthorize"]')?.forEach(btn => {
-    btn.addEventListener('click', () => {
-      replaceIndex = Number(btn.dataset.index);
-      setStatus(`请重新授权账号 #${replaceIndex + 1}，完成后粘贴新的回调 URL 提交。`, 'info', manageStatusEl);
-      loginBtn?.click();
-    });
-  });
-
-  document.querySelectorAll('[data-action="refreshProjectId"]')?.forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const idx = btn.dataset.index;
-      if (idx === undefined) return;
-
-      btn.disabled = true;
-      setStatus(`正在刷新账号 #${Number(idx) + 1} 的项目ID...`, 'info', manageStatusEl);
-
-      try {
-        const res = await fetch('/auth/accounts/' + idx + '/refresh-project-id', {
-          method: 'POST',
-          credentials: 'same-origin',
-          headers: { 'Content-Type': 'application/json' }
-        });
-
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok || data.error) {
-          throw new Error(data.error || `HTTP ${res.status}`);
-        }
-
-        setStatus(
-          `项目ID 已刷新为：${data.projectId || '未知'}`,
-          'success',
-          manageStatusEl
-        );
-        await refreshAccounts();
-      } catch (e) {
-        setStatus('刷新项目ID失败: ' + e.message, 'error', manageStatusEl);
-      } finally {
-        btn.disabled = false;
-      }
-    });
-  });
-
-  document.querySelectorAll('[data-action="toggleQuota"]')?.forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const idx = btn.dataset.index;
-      if (idx === undefined) return;
-
-      const quotaSection = document.getElementById(`quota-${idx}`);
-      if (!quotaSection) return;
-
-      quotaSection.style.display = 'block';
-      btn.textContent = '📊 刷新额度';
-      await loadQuota(idx, true);
-    });
-  });
-}
+// bindAccountActions 已移除，改用事件委托（见文件末尾）
 
 async function loadQuota(accountIndex, showLoading = false) {
   const quotaSection = document.getElementById(`quota-${accountIndex}`);
@@ -616,7 +515,9 @@ async function refreshAccounts() {
 
 function renderAccountsList() {
   if (!filteredAccounts.length) {
-    listEl.textContent = accountsData.length ? '没有符合筛选条件的凭证。' : '暂无账号，请先添加一个。';
+    listEl.innerHTML = accountsData.length
+      ? '<div class="quota-placeholder">没有符合筛选条件的凭证。</div>'
+      : '<div class="quota-placeholder">暂无账号，请先添加一个。</div>';
     if (paginationInfo) paginationInfo.textContent = '第 0 / 0 页';
     if (prevPageBtn) prevPageBtn.disabled = true;
     if (nextPageBtn) nextPageBtn.disabled = true;
@@ -628,64 +529,77 @@ function renderAccountsList() {
   const start = (currentPage - 1) * PAGE_SIZE;
   const pageItems = filteredAccounts.slice(start, start + PAGE_SIZE);
 
-  listEl.innerHTML = pageItems
-    .map(acc => {
-      const created = acc.createdAt ? new Date(acc.createdAt).toLocaleString() : '时间未知';
-      const statusClass = acc.enable ? 'status-ok' : 'status-off';
-      const statusText = acc.enable ? '启用中' : '已停用';
-      const displayName = escapeHtml(getAccountDisplayName(acc));
-      const projectId = acc.projectId ? escapeHtml(acc.projectId) : null;
-      return `
-        <div class="account-item">
-          <div class="account-header">
-            <div class="account-info">
-              <div class="account-title">
-                ${displayName}
-                ${projectId ? `<span class="badge">${projectId}</span>` : ''}
-              </div>
-              <div class="account-meta">创建时间：${created}</div>
-            </div>
-            <div class="account-status">
-              <div class="status-pill ${statusClass}">${statusText}</div>
-            </div>
-          </div>
+  listEl.innerHTML = pageItems.map(acc => {
+    const displayName = escapeHtml(getAccountDisplayName(acc));
+    const projectId = acc.projectId ? escapeHtml(acc.projectId) : '无 Project ID';
+    const created = acc.createdAt ? new Date(acc.createdAt).toLocaleDateString() : '';
 
-          <div class="account-content">
-            <div class="account-data">
-              ${renderUsageCard(acc)}
-            </div>
+    // Status
+    const statusClass = acc.enable ? 'cred-status-enabled' : 'cred-status-disabled';
+    const statusText = acc.enable ? '启用' : '停用';
 
-            <div class="account-actions">
-              <div class="action-row primary">
-                <button class="mini-btn" data-action="refresh" data-index="${acc.index}">🔁 刷新</button>
-              </div>
-              <div class="action-row secondary">
-                <button class="mini-btn" data-action="toggle" data-enable="${acc.enable}" data-index="${acc.index}">${
-        acc.enable ? '⏸️ 停用' : '▶️ 启用'
-      }</button>
-                <button class="mini-btn" data-action="reauthorize" data-index="${acc.index}">🔑 重新授权</button>
-                <button class="mini-btn danger" data-action="delete" data-index="${acc.index}">🗑️ 删除</button>
-              </div>
-              <div class="action-row secondary">
-                <button class="mini-btn" data-action="refreshProjectId" data-index="${acc.index}">🔄 刷新项目ID</button>
-                <button class="mini-btn" data-action="toggleQuota" data-index="${acc.index}">📊 查看额度</button>
-              </div>
-            </div>
-            <div class="quota-section" id="quota-${acc.index}" style="display: none;">
-              <div class="quota-loading">加载中...</div>
-            </div>
+    // Runtime stats
+    const stats = tokenRuntimeStats[acc.projectId] || { successCount: 0, failureCount: 0, inCooldown: false, lastFailure: 0 };
+    const totalReqs = stats.successCount + stats.failureCount;
+    const successRate = totalReqs > 0 ? Math.round((stats.successCount / totalReqs) * 100) : 100;
+    const rateClass = totalReqs === 0 ? '' : successRate >= 80 ? 'cred-rate-high' : successRate >= 50 ? 'cred-rate-medium' : 'cred-rate-low';
+    const ratePillClass = totalReqs === 0 ? '' : successRate >= 80 ? 'cred-stat-success' : successRate >= 50 ? 'cred-stat-warning' : 'cred-stat-danger';
+
+    // Cooldown
+    let cooldownHtml = '';
+    if (stats.inCooldown) {
+      const cooldownEnd = stats.lastFailure + tokenCooldownMs;
+      const remainingSeconds = Math.max(0, Math.ceil((cooldownEnd - Date.now()) / 1000));
+      cooldownHtml = `<span class="cred-cooldown">❄️ ${remainingSeconds}s</span>`;
+    }
+
+    return `
+      <div class="cred-card" data-index="${acc.index}">
+        <div class="cred-card-header">
+          <div class="cred-card-info">
+            <div class="cred-card-name" title="${displayName}">${displayName}</div>
+            <div class="cred-card-project" title="${projectId}">${projectId}</div>
+            ${created ? `<div class="cred-card-meta">创建: ${created}</div>` : ''}
           </div>
+          <span class="cred-status-pill ${statusClass}">${statusText}</span>
         </div>
-      `;
-    })
-    .join('');
+
+        <div class="cred-card-stats">
+          <span class="cred-stat-pill ${ratePillClass}">
+            ${totalReqs > 0 ? `成功率 ${successRate}%` : '暂无调用'}
+          </span>
+          ${cooldownHtml}
+        </div>
+
+        ${totalReqs > 0 ? `
+        <div class="cred-rate-bar">
+          <div class="cred-rate-fill ${rateClass}" style="width: ${successRate}%"></div>
+        </div>
+        ` : ''}
+
+        <div class="cred-card-meta">
+          ✅ ${stats.successCount} / ❌ ${stats.failureCount}
+        </div>
+
+        <div class="cred-card-actions">
+          <button class="mini-btn primary" data-action="refresh" data-index="${acc.index}" title="刷新凭证" aria-label="刷新凭证">🔁</button>
+          <button class="mini-btn" data-action="toggle" data-enable="${acc.enable}" data-index="${acc.index}" title="${acc.enable ? '停用' : '启用'}" aria-label="${acc.enable ? '停用' : '启用'}">
+            ${acc.enable ? '⏸️' : '▶️'}
+          </button>
+          <button class="mini-btn" data-action="reauthorize" data-index="${acc.index}" title="重新授权" aria-label="重新授权">🔑</button>
+          <button class="mini-btn" data-action="refreshProjectId" data-index="${acc.index}" title="刷新项目ID" aria-label="刷新项目ID">🔄</button>
+          <button class="mini-btn" data-action="viewQuota" data-index="${acc.index}" data-name="${displayName}" title="查看额度" aria-label="查看额度">📊</button>
+          <button class="mini-btn danger" data-action="delete" data-index="${acc.index}" title="删除" aria-label="删除">🗑️</button>
+        </div>
+      </div>
+    `;
+  }).join('');
 
   if (paginationInfo) {
     paginationInfo.textContent = `第 ${currentPage} / ${totalPages} 页，共 ${filteredAccounts.length} 个凭证`;
   }
   if (prevPageBtn) prevPageBtn.disabled = currentPage === 1;
   if (nextPageBtn) nextPageBtn.disabled = currentPage === totalPages;
-  bindAccountActions();
 }
 
 async function deleteDisabledAccounts() {
@@ -1642,20 +1556,6 @@ if (logNextPageBtn) {
   });
 }
 
-if (statusFilterSelect) {
-  statusFilterSelect.addEventListener('change', () => {
-    statusFilter = statusFilterSelect.value || 'all';
-    updateFilteredAccounts();
-  });
-}
-
-if (errorFilterCheckbox) {
-  errorFilterCheckbox.addEventListener('change', () => {
-    errorOnly = !!errorFilterCheckbox.checked;
-    updateFilteredAccounts();
-  });
-}
-
 if (themeToggleBtn) {
   themeToggleBtn.addEventListener('click', () => {
     const current = document.documentElement.getAttribute('data-theme') || 'light';
@@ -1836,6 +1736,161 @@ loadLogs();
 loadHourlyUsage();
 loadSettings();
 initLogSettingsUI();
+
+// === 新增：筛选标签事件委托 ===
+const credStatusFilters = document.getElementById('credStatusFilters');
+if (credStatusFilters) {
+  credStatusFilters.addEventListener('click', (e) => {
+    const tag = e.target.closest('.cred-filter-tag');
+    if (!tag) return;
+
+    // Update UI
+    credStatusFilters.querySelectorAll('.cred-filter-tag').forEach(t => {
+      t.classList.remove('active');
+      t.setAttribute('aria-pressed', 'false');
+    });
+    tag.classList.add('active');
+    tag.setAttribute('aria-pressed', 'true');
+
+    // Update state
+    const val = tag.dataset.value;
+    if (val === 'error') {
+      statusFilter = 'all';
+      errorOnly = true;
+    } else {
+      statusFilter = val;
+      errorOnly = false;
+    }
+
+    updateFilteredAccounts();
+  });
+}
+
+// === 新增：凭证卡片操作事件委托 ===
+if (listEl) {
+  listEl.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+
+    const action = btn.dataset.action;
+    const idx = btn.dataset.index;
+
+    switch (action) {
+      case 'refresh':
+        btn.disabled = true;
+        setStatus('正在刷新凭证...', 'info', manageStatusEl);
+        try {
+          await fetchJson(`/auth/accounts/${idx}/refresh`, { method: 'POST' });
+          setStatus('刷新成功', 'success', manageStatusEl);
+          refreshAccounts();
+        } catch (err) {
+          setStatus('刷新失败: ' + err.message, 'error', manageStatusEl);
+        } finally {
+          btn.disabled = false;
+        }
+        break;
+
+      case 'toggle':
+        const enable = btn.dataset.enable === 'false';
+        btn.disabled = true;
+        setStatus(enable ? '正在启用账号...' : '正在停用账号...', 'info', manageStatusEl);
+        try {
+          await fetchJson(`/auth/accounts/${idx}/enable`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enable })
+          });
+          setStatus(enable ? '已启用账号' : '已停用账号', 'success', manageStatusEl);
+          refreshAccounts();
+        } catch (err) {
+          setStatus('更新状态失败: ' + err.message, 'error', manageStatusEl);
+        } finally {
+          btn.disabled = false;
+        }
+        break;
+
+      case 'delete':
+        if (!confirm('确认删除这个账号吗？删除后无法恢复')) return;
+        btn.disabled = true;
+        setStatus('正在删除账号...', 'info', manageStatusEl);
+        try {
+          await fetchJson(`/auth/accounts/${idx}`, { method: 'DELETE' });
+          setStatus('账号已删除', 'success', manageStatusEl);
+          refreshAccounts();
+        } catch (err) {
+          setStatus('删除失败: ' + err.message, 'error', manageStatusEl);
+        } finally {
+          btn.disabled = false;
+        }
+        break;
+
+      case 'reauthorize':
+        replaceIndex = Number(idx);
+        setStatus(`请重新授权账号 #${replaceIndex + 1}，完成后粘贴新的回调 URL 提交。`, 'info', manageStatusEl);
+        loginBtn?.click();
+        break;
+
+      case 'refreshProjectId':
+        btn.disabled = true;
+        setStatus('正在刷新项目ID...', 'info', manageStatusEl);
+        try {
+          const res = await fetch('/auth/accounts/' + idx + '/refresh-project-id', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' }
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+          setStatus(`项目ID 已刷新为：${data.projectId || '未知'}`, 'success', manageStatusEl);
+          await refreshAccounts();
+        } catch (err) {
+          setStatus('刷新项目ID失败: ' + err.message, 'error', manageStatusEl);
+        } finally {
+          btn.disabled = false;
+        }
+        break;
+
+      case 'viewQuota':
+        openQuotaModal(idx, btn.dataset.name || '凭证');
+        break;
+    }
+  });
+}
+
+// === 新增：额度弹窗 ===
+const quotaModal = document.getElementById('quotaModal');
+const quotaModalTitle = document.getElementById('quotaModalTitle');
+const quotaModalContent = document.getElementById('quotaModalContent');
+const closeQuotaModalBtn = document.getElementById('closeQuotaModal');
+
+async function openQuotaModal(accountIndex, accountName) {
+  if (!quotaModal || !quotaModalContent) return;
+
+  quotaModalTitle.textContent = `${accountName} - 额度详情`;
+  quotaModalContent.innerHTML = '<div class="quota-loading">加载中...</div>';
+  quotaModal.style.display = 'flex';
+
+  try {
+    const data = await fetchJson(`/admin/tokens/${accountIndex}/quotas`, { cache: 'no-store' });
+    renderQuota(quotaModalContent, data.data);
+  } catch (err) {
+    quotaModalContent.innerHTML = `<div class="quota-error">加载失败: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function closeQuotaModalFn() {
+  if (quotaModal) quotaModal.style.display = 'none';
+}
+
+if (closeQuotaModalBtn) {
+  closeQuotaModalBtn.addEventListener('click', closeQuotaModalFn);
+}
+
+if (quotaModal) {
+  quotaModal.addEventListener('click', (e) => {
+    if (e.target === quotaModal) closeQuotaModalFn();
+  });
+}
 
 // ========== 冻结历史功能 ==========
 const freezeHistoryBtn = document.getElementById('freezeHistoryBtn');

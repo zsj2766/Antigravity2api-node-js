@@ -79,7 +79,7 @@ body {
 }
 
 .container {
-  max-width: 980px;
+  max-width: 1200px;
   margin: 32px auto;
   padding: 0 16px 32px;
 }
@@ -411,7 +411,7 @@ button:disabled {
 
 .account-content {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
   gap: 16px;
   align-items: start;
 }
@@ -427,8 +427,17 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  width: 180px;
   flex-shrink: 0;
+}
+
+.action-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.action-grid .mini-btn {
+  width: 100%;
 }
 
 .action-row {
@@ -461,6 +470,38 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+.usage-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 12px;
+}
+
+.usage-cell {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--muted);
+  min-width: 0;
+}
+
+.usage-cell span {
+  font-weight: 500;
+  color: var(--text);
+  flex: 0 0 auto;
+}
+
+.usage-cell strong {
+  color: var(--text);
+  font-weight: 600;
+  text-align: right;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .stats-header {
@@ -685,6 +726,15 @@ button:disabled {
   justify-content: center;
   gap: 4px;
   transition: background-color 0.2s ease, transform 0.1s ease;
+}
+
+.mini-btn.primary {
+  background: var(--button-bg);
+  color: var(--button-text);
+}
+
+.mini-btn.primary:hover {
+  background: var(--button-hover);
 }
 
 .mini-btn:hover {
@@ -959,6 +1009,26 @@ button:disabled {
   .quota-group-stats > span {
     flex: 1;
     min-width: 0;
+  }
+}
+
+@media (max-width: 960px) {
+  .account-content {
+    grid-template-columns: 1fr;
+  }
+
+  .action-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .action-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .usage-grid {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -1990,4 +2060,228 @@ button:disabled {
   text-align: center;
   color: var(--muted);
   padding: 40px 20px;
+}
+
+/* === Card Grid Layout === */
+.cred-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 12px;
+}
+
+@media (max-width: 1024px) {
+  .cred-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 640px) {
+  .cred-grid { grid-template-columns: 1fr; }
+}
+
+/* === Credential Card === */
+.cred-card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.cred-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow);
+  border-color: var(--accent-border);
+}
+
+.cred-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.cred-card-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cred-card-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cred-card-project {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: ui-monospace, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cred-card-meta {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* Status Pill */
+.cred-status-pill {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.cred-status-enabled {
+  background: var(--status-ok-bg);
+  color: var(--status-ok-text);
+}
+
+.cred-status-disabled {
+  background: var(--status-off-bg);
+  color: var(--status-off-text);
+}
+
+/* Stats Section */
+.cred-card-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.cred-stat-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--subtle-bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.cred-stat-success {
+  background: var(--status-ok-bg);
+  color: var(--status-ok-text);
+  border-color: var(--status-ok-bg);
+}
+
+.cred-stat-warning {
+  background: var(--chip-warning-bg);
+  color: var(--chip-warning-text);
+  border-color: var(--chip-warning-border);
+}
+
+.cred-stat-danger {
+  background: var(--status-off-bg);
+  color: var(--status-off-text);
+  border-color: var(--status-off-bg);
+}
+
+/* Success Rate Mini Bar */
+.cred-rate-bar {
+  width: 100%;
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.cred-rate-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.cred-rate-high { background: var(--status-ok-text); }
+.cred-rate-medium { background: var(--chip-warning-text); }
+.cred-rate-low { background: var(--status-off-text); }
+
+/* Card Actions */
+.cred-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
+}
+
+.cred-card-actions .mini-btn {
+  flex: 1;
+  min-width: 40px;
+  max-width: 50px;
+  justify-content: center;
+  padding: 6px 8px;
+}
+
+/* Cooldown Badge */
+.cred-cooldown {
+  font-size: 11px;
+  color: var(--chip-warning-text);
+  background: var(--chip-warning-bg);
+  border: 1px solid var(--chip-warning-border);
+  padding: 2px 6px;
+  border-radius: 4px;
+  animation: pulse 2s infinite;
+}
+
+/* === Filter Tags === */
+.cred-filter-section {
+  margin-bottom: 8px;
+}
+
+.cred-filter-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cred-filter-tag {
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  transition: all 0.2s ease;
+}
+
+.cred-filter-tag:hover {
+  background: var(--subtle-bg);
+  border-color: var(--accent-border);
+}
+
+.cred-filter-tag.active {
+  background: var(--accent-text);
+  color: var(--card-bg);
+  border-color: var(--accent-text);
+}
+
+/* === Quota Modal === */
+.quota-modal-content {
+  max-width: 800px;
+  width: 95%;
+}
+
+.quota-modal-body {
+  max-height: 70vh;
+  overflow-y: auto;
 }

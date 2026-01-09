@@ -110,19 +110,13 @@
           <button id="refreshBtn" class="refresh-btn">刷新列表</button>
         </div>
       </div>
-      <div class="filter-row">
-        <label class="filter-field">
-          <span>状态筛选</span>
-          <select id="statusFilter" class="input select">
-            <option value="all">全部</option>
-            <option value="enabled">仅启用</option>
-            <option value="disabled">仅停用</option>
-          </select>
-        </label>
-        <label class="filter-field checkbox-row">
-          <input type="checkbox" id="errorFilter" />
-          <span>仅显示有报错的凭证</span>
-        </label>
+      <div class="cred-filter-section">
+        <div class="cred-filter-tags" id="credStatusFilters">
+          <button class="cred-filter-tag active" data-value="all" aria-pressed="true">全部</button>
+          <button class="cred-filter-tag" data-value="enabled" aria-pressed="false">启用中</button>
+          <button class="cred-filter-tag" data-value="disabled" aria-pressed="false">已停用</button>
+          <button class="cred-filter-tag" data-value="error" aria-pressed="false">异常/报错</button>
+        </div>
       </div>
       <div class="status-row">
         <span id="manageStatus" class="badge" style="display:none;"></span>
@@ -134,7 +128,7 @@
           <button id="nextPageBtn" class="mini-btn">下一页</button>
         </div>
       </div>
-      <div id="accountsList" class="accounts-list">加载中...</div>
+      <div id="accountsList" class="cred-grid">加载中...</div>
     </section>
 
     <section class="card tab-panel" data-tab="usage">
@@ -268,6 +262,19 @@
         <div id="freezeHistoryList" class="freeze-history-list">
           <p class="loading">加载中...</p>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 额度详情模态框 -->
+  <div id="quotaModal" class="modal-overlay" style="display: none;">
+    <div class="modal-content quota-modal-content">
+      <div class="modal-header">
+        <h3 id="quotaModalTitle">凭证额度详情</h3>
+        <button id="closeQuotaModal" class="close-btn">&times;</button>
+      </div>
+      <div class="modal-body quota-modal-body">
+        <div id="quotaModalContent"></div>
       </div>
     </div>
   </div>
