@@ -41,6 +41,7 @@ import {
   getLogById,
   getQuotaList,
   getQuotaAll,
+  getSingleTokenQuota,
   getTokenStats
 } from '../../controllers/adminController.js';
 
@@ -70,6 +71,7 @@ router.get('/logs/:id', requirePanelAuthApi, getLogById);
 // ===== 额度查询 =====
 router.get('/quota/list', requireApiKey, getQuotaList);
 router.get('/quota/all', requireApiKey, getQuotaAll);
+router.get('/tokens/:index/quotas', requirePanelAuthApi, getSingleTokenQuota);
 router.get('/tokens/stats', requirePanelAuthApi, getTokenStats);
 
 // ===== OAuth 管理面板页面 =====

@@ -152,6 +152,9 @@ export function setStreamHeaders(res, options = {}) {
 
   // 初始化 locals
   if (!res.locals) res.locals = {};
+  if (res.locals.streamBodySent === undefined) {
+    res.locals.streamBodySent = false;
+  }
 
   // 心跳机制：定期发送 SSE 注释保持连接
   const interval = options.heartbeatInterval || 15000;
@@ -248,6 +251,9 @@ export function createStreamChunk(id, created, model, delta, finishReason = null
  * // 输出: data: {"id":"msg_1","content":"Hello"}\n\n
  */
 export function writeStreamData(res, data) {
+  if (res.locals) {
+    res.locals.streamBodySent = true;
+  }
   res.write(`data: ${JSON.stringify(data)}\n\n`);
 }
 

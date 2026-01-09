@@ -17,6 +17,9 @@ export class ClaudeProtocolEmitter extends BaseSseEmitter {
   }
 
   writeEvent(event, data) {
+    if (this.res?.locals) {
+      this.res.locals.streamBodySent = true;
+    }
     this.res.write(`event: ${event}\n`);
     this.res.write(`data: ${JSON.stringify(data)}\n\n`);
   }

@@ -187,6 +187,21 @@ export function extractErrorStatus(error, defaultStatus = 500) {
 }
 
 /**
+ * 生成重试日志消息
+ *
+ * @param {Error|Object} error
+ * @param {number|null} delayMs
+ * @returns {string}
+ */
+export function formatRetryMessage(error, delayMs) {
+  if (!delayMs) return error?.message || '请求失败';
+  if (error?.code === 'CAPACITY_EXHAUSTED') {
+    return `模型暂无容量，等待 ${Math.round(delayMs)}ms 后重试`;
+  }
+  return `429 限流，等待 ${Math.round(delayMs)}ms 后重试当前凭证`;
+}
+
+/**
  * 创建日志写入函数
  *
  * 生成一个绑定了请求上下文的日志写入函数。
@@ -288,5 +303,6 @@ export default {
   parseModelAlias,
   isImageModel,
   createLogWriter,
+  formatRetryMessage,
   extractErrorStatus
 };

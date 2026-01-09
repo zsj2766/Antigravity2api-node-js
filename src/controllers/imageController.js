@@ -15,6 +15,7 @@ import { withRetry } from '../utils/withRetry.js';
 import {
   IMAGE_SIZE_MAP,
   createLogWriter,
+  formatRetryMessage,
   extractErrorStatus
 } from './controllerUtils.js';
 
@@ -54,7 +55,7 @@ export async function handleImageGeneration(req, res) {
         writeLog({
           success: false,
           status: errorStatusInt,
-          message: delay ? `429 限流，等待 ${Math.round(delay)}ms 后重试当前凭证` : error.message,
+          message: formatRetryMessage(error, delay),
           isRetry: retryCountForLog > 0,
           retryCount: retryCountForLog,
           willRetry

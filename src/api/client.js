@@ -290,6 +290,19 @@ function statusFromStatusText(statusText) {
     return Number.isNaN(numeric) ? null : numeric;
 }
 
+function extractErrorInfo(errorObj) {
+    const details = Array.isArray(errorObj?.details) ? errorObj.details : [];
+    const errorInfo = details.find(
+        detail => typeof detail === 'object' && detail['@type']?.includes('ErrorInfo')
+    );
+    if (!errorInfo) return null;
+    return {
+        reason: errorInfo.reason,
+        domain: errorInfo.domain,
+        metadata: errorInfo.metadata
+    };
+}
+
 function parseRetryDelayMs(errorInfo, message) {
     let retryDelayMs = null;
 
@@ -334,14 +347,20 @@ function detectEmbeddedError(body) {
 
         if (!errorObj) return null;
 
-        const status = statusFromStatusText(errorObj.code || errorObj.status);
+        const errorInfo = extractErrorInfo(errorObj);
+        const messageText = typeof errorObj.message === 'string' ? errorObj.message : body;
+        const capacityExhausted = errorInfo?.reason === 'MODEL_CAPACITY_EXHAUSTED' ||
+            /no capacity available|capacity exhausted/i.test(String(messageText));
+        const status = capacityExhausted ? 503 : statusFromStatusText(errorObj.code || errorObj.status);
         const retryDelayMs = parseRetryDelayMs(errorObj, errorObj.message || body);
 
         return {
             status,
             message: JSON.stringify(errorObj, null, 2),
             retryDelayMs,
-            disableToken: status === 401
+            disableToken: status === 401,
+            reason: errorInfo?.reason,
+            capacityExhausted
         };
     } catch (e) {
         return null;
@@ -354,6 +373,8 @@ async function extractErrorDetails(error) {
     let retryDelayMs = error?.retryDelayMs || null;
     let disableToken = error?.disableToken === true;
     let rawResponse = null;
+    let errorReason = null;
+    let capacityExhausted = false;
 
     if (error?.response?.data?.readable) {
         const chunks = [];
@@ -378,6 +399,13 @@ async function extractErrorDetails(error) {
         retryDelayMs = embeddedError.retryDelayMs ?? retryDelayMs;
         disableToken = embeddedError.disableToken || disableToken;
         message = embeddedError.message;
+        errorReason = embeddedError.reason ?? errorReason;
+        capacityExhausted = embeddedError.capacityExhausted || capacityExhausted;
+    } else if (typeof message === 'string') {
+        const normalizedMessage = message.toLowerCase();
+        if (normalizedMessage.includes('no capacity available') || normalizedMessage.includes('capacity exhausted')) {
+            capacityExhausted = true;
+        }
     }
 
     return {
@@ -385,7 +413,9 @@ async function extractErrorDetails(error) {
         message,
         retryDelayMs,
         disableToken,
-        rawResponse
+        rawResponse,
+        errorReason,
+        capacityExhausted
     };
 }
 
@@ -398,6 +428,15 @@ async function handleApiError(error, token) {
         const err = new Error(`该账号没有使用权限或凭证失效，已自动禁用。错误详情: ${details.message}`);
         err.status = details.status;
         err.code = 'TOKEN_DISABLED';
+        err.rawResponse = details.rawResponse;
+        throw err;
+    }
+
+    if (details.capacityExhausted) {
+        const err = new Error(`模型暂无容量，请稍后重试。错误详情: ${details.message}`);
+        err.status = 503;
+        err.code = 'CAPACITY_EXHAUSTED';
+        err.retryAfter = details.retryDelayMs;
         err.rawResponse = details.rawResponse;
         throw err;
     }

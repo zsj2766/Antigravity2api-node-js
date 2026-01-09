@@ -29,6 +29,7 @@ import {
 import {
   parseModelAlias,
   createLogWriter,
+  formatRetryMessage,
   extractErrorStatus
 } from './controllerUtils.js';
 import { withRetry } from '../utils/withRetry.js';
@@ -67,7 +68,9 @@ async function handleChatStream(requestBody, token, res, id, model, streamEvents
   } finally {
     // 异常时使用 'error' 作为 finish_reason，正常时从 lastChunk 推断
     const finishReason = streamError ? 'error' : undefined;
-    processor.finish(lastChunk, finishReason);
+    if (res.locals?.streamBodySent === true || !streamError) {
+      processor.finish(lastChunk, finishReason);
+    }
   }
 
   // 收尾完成后再抛出异常，让上层处理
@@ -134,6 +137,11 @@ function sendErrorResponse(res, error, stream, model, retryCount) {
   }
   if (error.code === 'RATE_LIMITED' && error.retryAfter) {
     errorContent = `请求被限流，请等待 ${Math.ceil(error.retryAfter / 1000)} 秒后重试。`;
+  } else if (error.code === 'CAPACITY_EXHAUSTED') {
+    const waitText = error.retryAfter
+      ? `请等待 ${Math.ceil(error.retryAfter / 1000)} 秒后重试。`
+      : '请稍后重试。';
+    errorContent = `模型暂无容量，${waitText}`;
   } else if (error.code === 'TOKEN_DISABLED') {
     errorContent = `凭证已失效或无权限，已自动切换。请重试。`;
   }
@@ -202,7 +210,7 @@ export const createChatCompletionHandler = (resolveToken, options = {}) => async
         writeLog({
           success: false,
           status: errorStatusInt,
-          message: delay ? `429 限流，等待 ${Math.round(delay)}ms 后重试当前凭证` : error.message,
+          message: formatRetryMessage(error, delay),
           isRetry: retryCountForLog > 0,
           retryCount: retryCountForLog,
           willRetry,

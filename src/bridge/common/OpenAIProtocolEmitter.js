@@ -13,6 +13,9 @@ export class OpenAIProtocolEmitter extends BaseSseEmitter {
   }
 
   writeData(data) {
+    if (this.res?.locals) {
+      this.res.locals.streamBodySent = true;
+    }
     this.res.write(`data: ${JSON.stringify(data)}\n\n`);
   }
 

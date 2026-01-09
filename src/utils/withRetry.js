@@ -41,11 +41,13 @@ export async function withRetry({
 
   let attempt = 0;
   let retryCount = 0;
+  let lastToken = null;
   const excludedTokenIds = new Set();
 
   // 429 重试策略状态
   let retryingToken = null;
   const retried429Tokens = new Set();
+  let retriedCapacity = false;
 
   while (attempt < maxAttempts) {
     attempt++;
@@ -74,6 +76,7 @@ export async function withRetry({
         noTokenError.code = 'NO_TOKEN';
         throw noTokenError;
       }
+      lastToken = token;
 
       if (onTokenChange) {
         onTokenChange(token);
@@ -94,16 +97,37 @@ export async function withRetry({
       }
 
       // 如果响应头已发送，无法重试，直接抛出
-      if (res.headersSent) {
+      const canRetryAfterHeaders = res.locals?.streamBodySent === false;
+      if (res.headersSent && !canRetryAfterHeaders) {
         error.retryCount = retryCount;
         throw error;
       }
 
       const errorStatusInt = extractErrorStatus(error);
+      const isCapacityExhausted = error.code === 'CAPACITY_EXHAUSTED';
+
+      const currentToken = retryingToken || lastToken || await resolveToken(req, excludedTokenIds).catch(() => null);
+
+      // 容量不足：延迟后重试当前凭证一次（不计入冷却）
+      if (isCapacityExhausted && !retriedCapacity) {
+        const delay = calculateRetryDelay(attempt, error);
+        logger.warn(`模型容量不足，等待 ${Math.round(delay)}ms 后重试...`);
+
+        if (onRetry) {
+          onRetry(attempt, error, true, delay);
+        }
+
+        await new Promise(resolve => setTimeout(resolve, delay));
+
+        retriedCapacity = true;
+        retryCount++;
+        retryingToken = currentToken || retryingToken;
+        attempt--;
+        continue;
+      }
 
       // 429 重试策略：同一凭证重试一次
-      const currentToken = retryingToken || await resolveToken(req, excludedTokenIds).catch(() => null);
-      if (currentToken && errorStatusInt === 429) {
+      if (!isCapacityExhausted && currentToken && errorStatusInt === 429) {
         const tokenKey = tokenManager.getTokenKey(currentToken);
         if (!retried429Tokens.has(tokenKey)) {
           const delay = calculateRetryDelay(attempt, error);
@@ -124,7 +148,7 @@ export async function withRetry({
       }
 
       // 记录失败统计
-      if (currentToken) {
+      if (currentToken && !isCapacityExhausted) {
         tokenManager.recordFailure(currentToken, errorStatusInt);
         excludedTokenIds.add(tokenManager.getTokenKey(currentToken));
       }

@@ -28,6 +28,7 @@ import {
 } from '../utils/httpUtils.js';
 import {
   createLogWriter,
+  formatRetryMessage,
   extractErrorStatus
 } from './controllerUtils.js';
 import { withRetry } from '../utils/withRetry.js';
@@ -71,7 +72,6 @@ async function handleClaudeStream(requestBody, token, res, requestId, model, inp
     inputTokens,
     imageHandler: saveBase64Image
   });
-  processor.emitter.start();
 
   let lastChunk = null;
   let usage = null;
@@ -94,7 +94,9 @@ async function handleClaudeStream(requestBody, token, res, requestId, model, inp
 
     // 异常时使用 'error' 作为 stop_reason，正常时从 lastChunk 推断
     const stopReason = streamError ? 'error' : undefined;
-    processor.finish(lastChunk, stopReason);
+    if (res.locals?.streamBodySent === true || !streamError) {
+      processor.finish(lastChunk, stopReason);
+    }
   }
 
   // 收尾完成后再抛出异常，让上层处理
@@ -228,7 +230,7 @@ export async function handleClaudeMessages(req, res) {
         writeLog({
           success: false,
           status: errorStatusInt,
-          message: delay ? `429 限流，等待 ${Math.round(delay)}ms 后重试当前凭证` : error.message,
+          message: formatRetryMessage(error, delay),
           isRetry: retryCountForLog > 0,
           retryCount: retryCountForLog,
           willRetry

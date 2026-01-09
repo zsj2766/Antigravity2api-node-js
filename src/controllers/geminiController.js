@@ -23,6 +23,7 @@ import {
   attachImageUrlsToGeminiResponse,
   parseModelAlias,
   createLogWriter,
+  formatRetryMessage,
   extractErrorStatus
 } from './controllerUtils.js';
 import { withRetry } from '../utils/withRetry.js';
@@ -89,7 +90,7 @@ export async function handleGeminiGenerateContent(req, res) {
         writeLog({
           success: false,
           status: errorStatusInt,
-          message: delay ? `429 限流，等待 ${Math.round(delay)}ms 后重试当前凭证` : error.message,
+          message: formatRetryMessage(error, delay),
           isRetry: retryCountForLog > 0,
           retryCount: retryCountForLog,
           willRetry
@@ -187,7 +188,7 @@ export async function handleGeminiStreamGenerateContent(req, res) {
         writeLog({
           success: false,
           status: errorStatusInt,
-          message: delay ? `429 限流，等待 ${Math.round(delay)}ms 后重试当前凭证` : error.message,
+          message: formatRetryMessage(error, delay),
           isRetry: retryCountForLog > 0,
           retryCount: retryCountForLog,
           willRetry
@@ -206,9 +207,15 @@ export async function handleGeminiStreamGenerateContent(req, res) {
         for await (const { chunk, usage: u } of generateAssistantResponseStream(requestBody, token)) {
           streamEventsForLog.push(chunk);
           if (u) usage = u;
+          if (res.locals) {
+            res.locals.streamBodySent = true;
+          }
           res.write(`data: ${JSON.stringify(chunk)}\n\n`);
         }
 
+        if (res.locals) {
+          res.locals.streamBodySent = true;
+        }
         res.write(`data: ${JSON.stringify({ done: true, usage: usage || null })}\n\n`);
         res.end();
 
@@ -251,6 +258,9 @@ export async function handleGeminiStreamGenerateContent(req, res) {
     if (!res.headersSent) {
       res.status(status).json({ error: message });
     } else {
+      if (res.locals) {
+        res.locals.streamBodySent = true;
+      }
       res.write(`data: ${JSON.stringify({ error: message })}\n\n`);
       res.end();
     }

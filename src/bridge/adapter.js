@@ -9,6 +9,18 @@ import { Bridge } from './index.js';
 import config from '../config/config.js';
 import { generateRequestId } from '../utils/idGenerator.js';
 import { isThinkingModel } from '../utils/utils.js';
+import log from '../utils/logger.js';
+
+// 调试模式开关（通过环境变量控制）
+const DEBUG_BRIDGE = process.env.DEBUG_BRIDGE === 'true';
+
+/**
+ * 调试日志辅助函数
+ */
+function debugLog(stage, data) {
+  if (!DEBUG_BRIDGE) return;
+  log.debug(`[Bridge:${stage}]`, typeof data === 'object' ? JSON.stringify(data, null, 2) : data);
+}
 
 /**
  * 生成 Gemini 请求体（OpenAI 格式输入）
@@ -35,8 +47,27 @@ export async function generateRequestBody(messages, modelName, parameters, tools
     ...parameters
   };
 
+  // 调试日志：记录输入请求
+  debugLog('OpenAI-Input', {
+    model: modelName,
+    messageCount: messages?.length,
+    hasTools: !!tools?.length,
+    reasoning_effort: parameters?.reasoning_effort,
+    'reasoning.effort': parameters?.reasoning?.effort,
+    'thinking.type': parameters?.thinking?.type
+  });
+
   // 转换为 Gemini 格式
   const geminiRequest = await converter.convert(openaiBody, { model: modelName });
+
+  // 调试日志：记录转换后的 Gemini 请求
+  debugLog('Gemini-Output', {
+    model: modelName,
+    contentsCount: geminiRequest.contents?.length,
+    hasTools: !!geminiRequest.tools?.length,
+    thinkingConfig: geminiRequest.generationConfig?.thinkingConfig,
+    maxOutputTokens: geminiRequest.generationConfig?.maxOutputTokens
+  });
 
   // 合并系统指令
   if (geminiRequest.systemInstruction) {
@@ -91,13 +122,27 @@ export async function generateRequestBodyFromAnthropic(claudeBody, token) {
   const converter = Bridge.getRequestConverter('claude', 'gemini');
   const modelName = claudeBody.model;
 
+  // 调试日志：记录 Claude 输入请求
+  debugLog('Claude-Input', {
+    model: modelName,
+    messageCount: claudeBody.messages?.length,
+    hasTools: !!claudeBody.tools?.length,
+    max_tokens: claudeBody.max_tokens,
+    'thinking.type': claudeBody.thinking?.type,
+    'thinking.budget_tokens': claudeBody.thinking?.budget_tokens
+  });
+
   // 转换为 Gemini 格式
   const geminiRequest = await converter.convert(claudeBody, { model: modelName });
 
-  // 调试日志：打印 thinkingConfig
-  if (geminiRequest.generationConfig?.thinkingConfig) {
-    console.log('[Bridge] Gemini thinkingConfig:', JSON.stringify(geminiRequest.generationConfig.thinkingConfig));
-  }
+  // 调试日志：记录转换后的 Gemini 请求
+  debugLog('Gemini-Output', {
+    model: modelName,
+    contentsCount: geminiRequest.contents?.length,
+    hasTools: !!geminiRequest.tools?.length,
+    thinkingConfig: geminiRequest.generationConfig?.thinkingConfig,
+    maxOutputTokens: geminiRequest.generationConfig?.maxOutputTokens
+  });
 
   // 合并系统指令
   if (geminiRequest.systemInstruction) {

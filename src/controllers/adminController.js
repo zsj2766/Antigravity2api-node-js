@@ -844,6 +844,47 @@ export async function getQuotaAll(req, res) {
 }
 
 /**
+ * 获取单个凭证的额度信息
+ *
+ * 根据索引查询指定凭证的剩余额度。
+ *
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ */
+export async function getSingleTokenQuota(req, res) {
+  const index = Number.parseInt(req.params.index, 10);
+  if (Number.isNaN(index)) {
+    return res.status(400).json({ error: '无效的凭证索引' });
+  }
+
+  try {
+    const accounts = readAccountsRaw();
+    if (index < 0 || index >= accounts.length) {
+      return res.status(404).json({ error: '凭证不存在' });
+    }
+
+    const account = accounts[index];
+    if (!account) {
+      return res.status(404).json({ error: '凭证不存在' });
+    }
+
+    if (!account.refresh_token) {
+      return res.status(400).json({ error: '凭证缺少 refresh_token' });
+    }
+
+    const quotaResult = await quotaManager.getQuotas(account.refresh_token, account);
+
+    return res.json({
+      success: true,
+      data: quotaResult
+    });
+  } catch (e) {
+    logger.error(`获取凭证 ${index} 额度失败:`, e.message);
+    return res.status(500).json({ error: e.message || '获取额度失败' });
+  }
+}
+
+/**
  * 获取 Token 运行时统计
  *
  * 返回每个凭证的使用次数、冷却状态等运行时信息。
@@ -909,5 +950,6 @@ export default {
   // 额度查询
   getQuotaList,
   getQuotaAll,
+  getSingleTokenQuota,
   getTokenStats
 };

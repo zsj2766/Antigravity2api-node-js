@@ -325,30 +325,76 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
   /**
    * 判断是否启用 thinking 模式
    *
-   * 与 CLIProxyAPI 保持一致：只检查顶级 reasoning_effort 字段
+   * 与 CLIProxyAPI 保持一致，检查以下条件：
+   * 1. 顶级 reasoning_effort 字段（OpenAI 官方格式）
+   * 2. 嵌套 reasoning.effort 字段（Claude Code CLI 格式）
+   * 3. 模型名称包含 -thinking 后缀
    *
-   * 关键发现：CLIProxyAPI 在 antigravity_openai_request.go:40-41 中：
-   *   re := gjson.GetBytes(rawJSON, "reasoning_effort")
-   *   hasOfficialThinking := re.Exists()
-   *
-   * 它只检查 "reasoning_effort" 顶级字段，不处理 "reasoning.effort" 嵌套对象。
-   * 这是因为 Claude Code CLI 发送的请求格式是 reasoning: { effort, enabled }，
-   * 但这种格式在 Gemini 转 Claude 的场景下会导致问题：
-   * - 历史消息中没有 thinking 块
-   * - 但我们启用了 thinking 模式
-   * - Claude API 要求 thinking 模式下 assistant 消息必须以 thinking 块开头
-   *
-   * 解决方案：与 CLIProxyAPI 一致，只处理顶级 reasoning_effort 字段
+   * CLIProxyAPI 通过模型注册表将 *-thinking 模型标记为需要 thinking，
+   * 然后通过 ApplyDefaultThinkingIfNeededCLI 自动注入配置。
+   * 本项目通过模型名检测来实现相同效果。
    */
   resolveThinkingEnabled(parameters = {}, modelName = '') {
-    // 与 CLIProxyAPI 完全一致：只检查顶级 reasoning_effort 字段
-    // 不处理 reasoning.effort 嵌套对象（因为历史消息可能没有 thinking 块）
+    // 1. 检查顶级 reasoning_effort 字段 (OpenAI 官方格式)
     if (typeof parameters?.reasoning_effort === 'string') {
       return true;
     }
-    // 不检查 reasoning.effort 或 reasoning.enabled
-    // 不根据模型名自动启用 thinking
+
+    // 2. 检查嵌套 reasoning.effort 字段 (Claude Code CLI 格式)
+    if (parameters?.reasoning && typeof parameters.reasoning.effort === 'string') {
+      return true;
+    }
+
+    // 3. 检查 thinking 对象 (Claude 原生格式，直接支持)
+    // 这样可以避免先经过 ClaudeToOpenAI 再转换的多余链路
+    if (parameters?.thinking?.type === 'enabled' && parameters.thinking.budget_tokens) {
+      return true;
+    }
+
+    // 4. 检查模型名称是否包含 -thinking 后缀
+    // 这对应 CLIProxyAPI 的 ApplyDefaultThinkingIfNeededCLI 逻辑
+    if (typeof modelName === 'string' && modelName.includes('-thinking')) {
+      return true;
+    }
+
     return false;
+  }
+
+  /**
+   * 获取 reasoning effort 值
+   *
+   * 按优先级返回：reasoning_effort > reasoning.effort > thinking.budget_tokens > 默认值
+   *
+   * @param {object} parameters - 请求参数
+   * @param {string} modelName - 模型名称（用于检测 -thinking 后缀）
+   * @returns {string|null} effort 值
+   */
+  getReasoningEffort(parameters = {}, modelName = '') {
+    // 1. 顶级 reasoning_effort 优先
+    if (typeof parameters?.reasoning_effort === 'string') {
+      return parameters.reasoning_effort;
+    }
+
+    // 2. 嵌套 reasoning.effort
+    if (parameters?.reasoning && typeof parameters.reasoning.effort === 'string') {
+      return parameters.reasoning.effort;
+    }
+
+    // 3. thinking 对象 (Claude 原生格式) - 将 budget_tokens 转换为 effort
+    if (parameters?.thinking?.type === 'enabled' && parameters.thinking.budget_tokens) {
+      const budget = parameters.thinking.budget_tokens;
+      // 使用与 mappingUtils.resolveReasoningEffort 相同的阈值逻辑
+      if (budget < 7500) return 'low';
+      if (budget < 15000) return 'medium';
+      return 'high';
+    }
+
+    // 4. 模型名包含 -thinking 时，返回默认值
+    if (typeof modelName === 'string' && modelName.includes('-thinking')) {
+      return 'high'; // 默认使用 high effort
+    }
+
+    return null;
   }
 
   shouldForceThoughtSignature(modelName, enableThinking) {
@@ -823,11 +869,11 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
     }
 
     // 处理 reasoning effort -> thinking config
-    // 与 CLIProxyAPI 保持一致：只处理顶级 reasoning_effort 字段
-    // 不处理 reasoning.effort 嵌套对象（避免历史消息无 thinking 块导致 Claude 报错）
-    const effort = typeof parameters.reasoning_effort === 'string'
-      ? parameters.reasoning_effort
-      : null;
+    // 支持多种格式：
+    // 1. reasoning_effort (顶级字段，OpenAI 官方格式)
+    // 2. reasoning.effort (嵌套对象，Claude Code CLI 格式)
+    // 3. 模型名包含 -thinking 时使用默认值
+    const effort = this.getReasoningEffort(parameters, modelName);
 
     if (effort) {
       // 判断是否使用 thinkingLevel（Gemini 3 系列）还是 thinkingBudget
