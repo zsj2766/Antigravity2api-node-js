@@ -254,6 +254,17 @@ export const createChatCompletionHandler = (resolveToken, options = {}) => async
     const errorStatusInt = extractErrorStatus(error);
     const retryCount = error.retryCount || retryCountForLog;
 
+    if (error.code === 'CONNECTION_CLOSED') {
+      writeLog({
+        success: false,
+        status: errorStatusInt,
+        message: error.message,
+        isRetry: retryCount > 0,
+        retryCount
+      });
+      return;
+    }
+
     logger.error('生成响应失败:', error.message);
     writeLog({
       success: false,

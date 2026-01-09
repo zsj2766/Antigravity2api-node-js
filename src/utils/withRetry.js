@@ -53,7 +53,10 @@ export async function withRetry({
 
     try {
       if (res.writableEnded || req.destroyed) {
-        throw new Error('Connection closed');
+        const closedError = new Error('Connection closed');
+        closedError.code = 'CONNECTION_CLOSED';
+        closedError.status = 499;
+        throw closedError;
       }
 
       // 获取 token
@@ -85,6 +88,11 @@ export async function withRetry({
       return { result, token, retryCount };
 
     } catch (error) {
+      if (error.code === 'CONNECTION_CLOSED') {
+        error.retryCount = retryCount;
+        throw error;
+      }
+
       // 如果响应头已发送，无法重试，直接抛出
       if (res.headersSent) {
         error.retryCount = retryCount;

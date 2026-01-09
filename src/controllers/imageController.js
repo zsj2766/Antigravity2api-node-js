@@ -116,6 +116,17 @@ export async function handleImageGeneration(req, res) {
     const message = error?.message || '图片生成失败';
     const retryCount = error.retryCount || retryCountForLog;
 
+    if (error.code === 'CONNECTION_CLOSED') {
+      writeLog({
+        success: false,
+        status,
+        message,
+        isRetry: retryCount > 0,
+        retryCount
+      });
+      return;
+    }
+
     writeLog({
       success: false,
       status,

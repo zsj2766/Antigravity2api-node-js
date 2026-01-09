@@ -263,12 +263,25 @@ export async function handleClaudeMessages(req, res) {
     });
 
   } catch (error) {
+    const retryCount = error.retryCount || retryCountForLog;
+
+    if (error.code === 'CONNECTION_CLOSED') {
+      const status = extractErrorStatus(error);
+      writeLog({
+        success: false,
+        status,
+        message: error?.message,
+        isRetry: retryCount > 0,
+        retryCount
+      });
+      return;
+    }
+
     logger.error('/v1/messages 请求失败:', error?.message || error);
 
     const validationErrors = ['messages 不能为空', 'max_tokens 是必填数字', '请求体格式不合法'];
     const isValidationError = validationErrors.some(msg => error?.message?.includes(msg));
     const status = isValidationError ? 400 : extractErrorStatus(error);
-    const retryCount = error.retryCount || retryCountForLog;
 
     writeLog({
       success: false,

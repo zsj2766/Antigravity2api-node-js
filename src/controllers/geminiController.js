@@ -119,6 +119,17 @@ export async function handleGeminiGenerateContent(req, res) {
     const message = error?.message || 'Gemini generateContent 调用失败';
     const retryCount = error.retryCount || retryCountForLog;
 
+    if (error.code === 'CONNECTION_CLOSED') {
+      writeLog({
+        success: false,
+        status,
+        message,
+        isRetry: retryCount > 0,
+        retryCount
+      });
+      return;
+    }
+
     writeLog({
       success: false,
       status,
@@ -217,6 +228,17 @@ export async function handleGeminiStreamGenerateContent(req, res) {
     const status = extractErrorStatus(error);
     const message = error?.message || 'Gemini streamGenerateContent 调用失败';
     const retryCount = error.retryCount || retryCountForLog;
+
+    if (error.code === 'CONNECTION_CLOSED') {
+      writeLog({
+        success: false,
+        status,
+        message,
+        isRetry: retryCount > 0,
+        retryCount
+      });
+      return;
+    }
 
     writeLog({
       success: false,
