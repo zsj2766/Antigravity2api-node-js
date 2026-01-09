@@ -61,7 +61,8 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
 
     // 确保消息角色交替（Gemini 强制要求 User/Model 交替）
     const mergedContents = mergeConsecutiveRoles(contents);
-    this.ensureThinkingPrefixForToolCalls(mergedContents, modelName, enableThinking);
+    // 与 CLIProxyAPI 保持一致：无条件为 functionCall/inlineData 添加 thoughtSignature
+    this.ensureThinkingPrefixForToolCalls(mergedContents);
     if (mergedContents.length === 0) {
       mergedContents.push({ role: 'user', parts: [{ text: '' }] });
     } else if (mergedContents[0].role !== 'user') {
@@ -253,11 +254,12 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
           }
         };
 
-        // 获取工具调用的 thoughtSignature
+        // 获取工具调用的 thoughtSignature（与 CLIProxyAPI 保持一致：无条件添加）
         const signature = getThoughtSignature(toolCall.id);
         if (signature) {
           part.thoughtSignature = signature;
-        } else if (forceThoughtSignature) {
+        } else {
+          // CLIProxyAPI 无条件为所有 functionCall 添加 thoughtSignature
           part.thoughtSignature = THOUGHT_SIGNATURE_SKIP;
         }
 
@@ -351,13 +353,10 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
   /**
    * 为工具调用添加 thoughtSignature（不注入 thinking 块）
    *
-   * 与 CLIProxyAPI 保持一致：只为 functionCall 添加 thoughtSignature，
+   * 与 CLIProxyAPI 保持一致：无条件为 functionCall 和 inlineData 添加 thoughtSignature，
    * 不注入假的 thinking 块（避免 Gemini→Claude 转换时格式错误）
    */
-  ensureThinkingPrefixForToolCalls(contents, modelName, enableThinking) {
-    if (!this.shouldForceThoughtSignature(modelName, enableThinking)) {
-      return;
-    }
+  ensureThinkingPrefixForToolCalls(contents) {
     if (!Array.isArray(contents)) return;
 
     for (const content of contents) {
@@ -365,9 +364,9 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
         continue;
       }
 
-      // 只为 functionCall 部分添加 thoughtSignature，不注入 thinking 块
+      // 无条件为 functionCall 和 inlineData 添加 thoughtSignature（与 CLIProxyAPI 一致）
       for (const part of content.parts) {
-        if (part && part.functionCall && !part.thoughtSignature) {
+        if (part && (part.functionCall || part.inlineData) && !part.thoughtSignature) {
           part.thoughtSignature = THOUGHT_SIGNATURE_SKIP;
         }
       }
@@ -451,11 +450,13 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
 
     const match = url.match(DATA_URL_REGEX);
     if (match) {
+      // 与 CLIProxyAPI 保持一致：inlineData 无条件添加 thoughtSignature
       return {
         inlineData: {
           mimeType: match[1],
           data: match[2]
-        }
+        },
+        thoughtSignature: THOUGHT_SIGNATURE_SKIP
       };
     }
 
