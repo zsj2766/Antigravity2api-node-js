@@ -16,8 +16,7 @@ import {
   DATA_URL_REGEX,
   DOCUMENT_MIME_TYPES,
   AUDIO_FORMAT_MIME,
-  EXTENSION_MIME_MAP,
-  unpackThinkingText
+  EXTENSION_MIME_MAP
 } from '../common/index.js';
 import {
   getThoughtSignature,
@@ -184,9 +183,8 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
    */
   buildAssistantParts(message, modelName = '', enableThinking = false) {
     const parts = [];
-    const forceThoughtSignature = this.shouldForceThoughtSignature(modelName, enableThinking);
 
-    // 处理内容数组 (支持 text 和 thinking)
+    // 处理内容数组 (只处理 text 和 image_url，与 CLIProxyAPI 保持一致)
     if (message.content) {
       if (typeof message.content === 'string') {
         const textPart = { text: message.content };
@@ -209,32 +207,16 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
               parts.push(textPart);
             }
           } else if (item.type === 'thinking') {
-            // 非标准扩展：保留 thinking 内容（来自 ClaudeToOpenAI 透传）
-            // 解包 thinking 字段（可能是字符串、{text}、{thinking} 对象）
-            const thinkingText = unpackThinkingText(item.thinking);
-            if (!thinkingText) {
-              // 空文本直接丢弃
-              continue;
-            }
-
-            // 按 CLIProxyAPI 策略：只保留有有效签名（>=50字符）的 thinking 块
-            const hasValidSignature = item.signature && item.signature.length >= 50;
-
-            if (hasValidSignature) {
-              parts.push({
-                thought: true,
-                text: thinkingText,
-                thoughtSignature: item.signature
-              });
-            } else if (forceThoughtSignature) {
-              // Claude 模型启用 thinking 时，使用 skip sentinel 绕过签名验证
-              parts.push({
-                thought: true,
-                text: thinkingText,
-                thoughtSignature: THOUGHT_SIGNATURE_SKIP
-              });
-            }
-            // 无有效签名且非 forceThoughtSignature 模式的 thinking 块直接丢弃
+            // 与 CLIProxyAPI 保持一致：忽略 thinking 类型的内容块
+            // 原因：
+            // 1. 历史消息中的 thinking 内容通常没有有效签名（被外部服务丢失）
+            // 2. 传递无效签名的 thinking 块会导致 Antigravity API 拒绝请求
+            // 3. CLIProxyAPI 的 antigravity_openai_request.go 只处理 text 和 image_url，忽略其他类型
+            // 4. 不传递 thinking 块 = 让模型重新思考（这是可接受的）
+            //
+            // 注意：只有带有效签名的 thinking 块才应该保留，但实际上
+            // 外部服务（Claude→OpenAI 转换）通常不会保留签名信息
+            continue;
           }
         }
       }
@@ -395,11 +377,6 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
     }
 
     return null;
-  }
-
-  shouldForceThoughtSignature(modelName, enableThinking) {
-    if (!enableThinking) return false;
-    return typeof modelName === 'string' && modelName.includes('claude');
   }
 
   /**
