@@ -21,7 +21,8 @@ import {
 } from '../common/index.js';
 import {
   safeJsonParse,
-  safeJsonStringify
+  safeJsonStringify,
+  getTextThoughtSignature
 } from '../../utils/utils.js';
 
 const THOUGHT_SIGNATURE_SKIP = 'skip_thought_signature_validator';
@@ -206,6 +207,39 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
    */
   buildAssistantParts(message, modelName = '', enableThinking = false) {
     const parts = [];
+
+    // 处理 reasoning_content（OpenAI o1/o3 格式的思考内容）
+    // 必须放在最前面，对应 Claude 的 thinking block 要求
+    // 注意：这是对 CLIProxyAPI 的扩展，用于支持多轮 thinking 对话
+    if (message.reasoning_content) {
+      const thoughtPart = {
+        text: message.reasoning_content,
+        thought: true  // Gemini 格式的思考标记
+      };
+      // 签名优先级：1. 透传签名 2. 缓存签名 3. SKIP
+      if (message.reasoning_signature) {
+        thoughtPart.thoughtSignature = message.reasoning_signature;
+      } else {
+        // 尝试从缓存获取签名（按文本内容查找）
+        const cached = getTextThoughtSignature(message.reasoning_content);
+        if (cached?.signature) {
+          thoughtPart.thoughtSignature = cached.signature;
+        } else {
+          // 没有签名时使用跳过标记
+          thoughtPart.thoughtSignature = THOUGHT_SIGNATURE_SKIP;
+        }
+      }
+      parts.push(thoughtPart);
+    } else if (enableThinking) {
+      // 当启用 thinking 但历史消息没有 reasoning_content 时，添加空 thought 占位符
+      // 这是为了确保 Antigravity 后端转换为 Claude 格式时能正确生成 thinking block
+      // Claude API 要求：启用 thinking 后，所有 assistant 消息必须以 thinking 开头
+      parts.push({
+        text: '',
+        thought: true,
+        thoughtSignature: THOUGHT_SIGNATURE_SKIP
+      });
+    }
 
     // 处理 content（与 CLIProxyAPI 完全一致）
     if (message.content) {

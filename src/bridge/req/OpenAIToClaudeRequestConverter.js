@@ -85,6 +85,10 @@ export class OpenAIToClaudeRequestConverter extends IRequestConverter {
       if (result.max_tokens <= budgetTokens) {
         result.max_tokens = budgetTokens + 10000;
       }
+
+      // 当启用 thinking 时，确保所有 assistant 消息都以 thinking block 开头
+      // Claude API 要求：启用 thinking 后，assistant 消息必须以 thinking/redacted_thinking 开头
+      this.ensureThinkingBlocks(result.messages);
     }
 
     return result;
@@ -112,6 +116,20 @@ export class OpenAIToClaudeRequestConverter extends IRequestConverter {
         });
       } else if (msg.role === 'assistant') {
         const content = [];
+
+        // 添加 thinking block（OpenAI reasoning_content -> Claude thinking）
+        // 必须放在最前面，Claude 要求 assistant 消息以 thinking 开头
+        if (msg.reasoning_content) {
+          const thinkingBlock = {
+            type: 'thinking',
+            thinking: msg.reasoning_content
+          };
+          // 如果有签名则添加（用于多轮对话时保持签名一致性）
+          if (msg.reasoning_signature) {
+            thinkingBlock.signature = msg.reasoning_signature;
+          }
+          content.push(thinkingBlock);
+        }
 
         // 添加文本内容
         if (msg.content) {
@@ -660,6 +678,37 @@ export class OpenAIToClaudeRequestConverter extends IRequestConverter {
       return content;
     }
     return [{ type: 'text', text: '' }];
+  }
+
+  /**
+   * 确保所有 assistant 消息都以 thinking block 开头
+   *
+   * Claude API 要求：当启用 thinking 时，assistant 消息必须以 thinking 或 redacted_thinking 开头。
+   * 如果历史消息中的 assistant 没有 thinking block（比如之前的对话未启用 thinking），
+   * 需要添加一个 redacted_thinking block 作为占位符。
+   *
+   * @param {Array} messages - Claude messages 数组（会被原地修改）
+   */
+  ensureThinkingBlocks(messages) {
+    if (!Array.isArray(messages)) return;
+
+    for (const msg of messages) {
+      if (msg.role !== 'assistant') continue;
+      if (!Array.isArray(msg.content) || msg.content.length === 0) continue;
+
+      const firstBlock = msg.content[0];
+      // 检查是否已有 thinking 或 redacted_thinking block
+      if (firstBlock.type === 'thinking' || firstBlock.type === 'redacted_thinking') {
+        continue;
+      }
+
+      // 需要在开头添加 redacted_thinking block
+      // redacted_thinking 表示思考内容被删除/不可用，但满足 Claude API 的格式要求
+      msg.content.unshift({
+        type: 'redacted_thinking',
+        data: 'kMPE'  // 最小有效 base64 占位符
+      });
+    }
   }
 }
 
