@@ -231,11 +231,12 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
       }
       parts.push(thoughtPart);
     } else if (enableThinking) {
-      // 当启用 thinking 但历史消息没有 reasoning_content 时，添加空 thought 占位符
+      // 当启用 thinking 但历史消息没有 reasoning_content 时，添加 redacted thought 占位符
       // 这是为了确保 Antigravity 后端转换为 Claude 格式时能正确生成 thinking block
       // Claude API 要求：启用 thinking 后，所有 assistant 消息必须以 thinking 开头
+      // 注意：text 必须非空，否则 Claude API 报错 "thinking.thinking: Field required"
       parts.push({
-        text: '',
+        text: '[redacted]',
         thought: true,
         thoughtSignature: THOUGHT_SIGNATURE_SKIP
       });
