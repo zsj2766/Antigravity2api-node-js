@@ -66,6 +66,11 @@ function resolveRequestLogLevel(value, defaultValue = 'all') {
   return ['off', 'error', 'all'].includes(normalized) ? normalized : defaultValue;
 }
 
+function resolvePipelineLogLevel(value, defaultValue = 'full') {
+  const normalized = String(value || '').toLowerCase();
+  return ['off', 'summary', 'full', 'error'].includes(normalized) ? normalized : defaultValue;
+}
+
 function ensureEnvFile() {
   if (!fs.existsSync(envPath)) {
     fs.writeFileSync(envPath, defaultEnv, 'utf8');
@@ -165,6 +170,12 @@ function loadConfigFromEnv() {
       requestLogLevel: resolveRequestLogLevel(
         pickEnvOrData('REQUEST_LOG_LEVEL', flat.REQUEST_LOG_LEVEL),
         'all'
+      ),
+      // SQLite 日志存储配置
+      sqliteDbPath: pickEnvOrData('SQLITE_DB_PATH', flat.SQLITE_DB_PATH, null),
+      pipelineLogLevel: resolvePipelineLogLevel(
+        pickEnvOrData('PIPELINE_LOG_LEVEL', flat.PIPELINE_LOG_LEVEL),
+        'full'
       )
     },
     // 面板账号相关：仅从 Docker 环境变量读取，启动时在 server 里强制校验

@@ -39,7 +39,10 @@ import {
   getLogDetail,
   getRecentLogs,
   getUsageCountsWithinWindow,
-  clearLogs
+  clearLogs,
+  getDbStats,
+  cleanupOldLogs,
+  getLogCount
 } from '../utils/log_store.js';
 import tokenManager from '../auth/token_manager.js';
 import quotaManager from '../auth/quota_manager.js';
@@ -621,14 +624,43 @@ export function updateLogSettings(req, res) {
 /**
  * 获取调用日志列表
  *
- * 返回最近的 API 调用日志。
+ * 返回最近的 API 调用日志，支持分页和筛选。
  *
  * @param {import('express').Request} req
  * @param {import('express').Response} res
  */
 export function getLogs(req, res) {
-  const limit = req.query.limit ? Number.parseInt(req.query.limit, 10) : 200;
-  res.json({ logs: getRecentLogs(limit) });
+  const limit = req.query.limit ? Number.parseInt(req.query.limit, 10) : 50;
+  const offset = req.query.offset ? Number.parseInt(req.query.offset, 10) : 0;
+  const page = req.query.page ? Number.parseInt(req.query.page, 10) : 1;
+
+  // 计算实际偏移量
+  const actualOffset = offset || ((page - 1) * limit);
+
+  // 筛选参数
+  const options = {
+    limit,
+    offset: actualOffset,
+    model: req.query.model || undefined,
+    success: req.query.success !== undefined ? req.query.success === 'true' : undefined,
+    projectId: req.query.projectId || undefined,
+    startTime: req.query.startTime || undefined,
+    endTime: req.query.endTime || undefined
+  };
+
+  // 获取总数用于分页
+  const total = getLogCount(options);
+  const logs = getRecentLogs(options);
+
+  res.json({
+    logs,
+    pagination: {
+      total,
+      page: Math.floor(actualOffset / limit) + 1,
+      limit,
+      totalPages: Math.ceil(total / limit)
+    }
+  });
 }
 
 /**
@@ -922,6 +954,164 @@ export function getTokenStats(req, res) {
   }
 }
 
+// ========== 数据库管理处理器 ==========
+
+/**
+ * 获取数据库统计信息
+ *
+ * 返回 SQLite 数据库的统计信息。
+ *
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ */
+export function getDbStatsApi(req, res) {
+  try {
+    const stats = getDbStats();
+    if (!stats) {
+      return res.status(501).json({ error: '数据库统计不可用' });
+    }
+    return res.json({ success: true, stats });
+  } catch (e) {
+    logger.error('获取数据库统计失败:', e.message);
+    return res.status(500).json({ error: e.message || '获取统计失败' });
+  }
+}
+
+/**
+ * 清理过期日志
+ *
+ * 删除超过保留期限的日志条目。
+ *
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ */
+export function cleanupLogsApi(req, res) {
+  try {
+    const deleted = cleanupOldLogs();
+    return res.json({ success: true, deleted });
+  } catch (e) {
+    logger.error('清理过期日志失败:', e.message);
+    return res.status(500).json({ error: e.message || '清理失败' });
+  }
+}
+
+/**
+ * 导出日志
+ *
+ * 以 JSON 格式导出日志数据。
+ *
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ */
+export function exportLogsApi(req, res) {
+  try {
+    const format = req.query.format || 'json';
+    const limit = req.query.limit ? Number.parseInt(req.query.limit, 10) : 1000;
+
+    const logs = getRecentLogs({ limit });
+
+    if (format === 'csv') {
+      // CSV 格式导出
+      const headers = ['id', 'timestamp', 'model', 'projectId', 'success', 'status', 'durationMs', 'path', 'method', 'message'];
+      const csvRows = [headers.join(',')];
+
+      logs.forEach(log => {
+        const row = headers.map(h => {
+          const val = log[h];
+          if (val === null || val === undefined) return '';
+          if (typeof val === 'string' && (val.includes(',') || val.includes('"'))) {
+            return `"${val.replace(/"/g, '""')}"`;
+          }
+          return String(val);
+        });
+        csvRows.push(row.join(','));
+      });
+
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="logs-${Date.now()}.csv"`);
+      return res.send(csvRows.join('\n'));
+    }
+
+    // JSON 格式导出
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename="logs-${Date.now()}.json"`);
+    return res.json({ logs, exportedAt: new Date().toISOString(), count: logs.length });
+  } catch (e) {
+    logger.error('导出日志失败:', e.message);
+    return res.status(500).json({ error: e.message || '导出失败' });
+  }
+}
+
+// ========== SSE 实时日志推送 ==========
+
+// 存储活跃的 SSE 连接
+const sseClients = new Set();
+
+/**
+ * SSE 实时日志流
+ *
+ * 建立 Server-Sent Events 连接，实时推送新日志。
+ *
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ */
+export function liveLogsApi(req, res) {
+  // 设置 SSE 头
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+
+  // 发送初始连接成功消息
+  res.write(`data: ${JSON.stringify({ type: 'connected', timestamp: new Date().toISOString() })}\n\n`);
+
+  // 添加到客户端列表
+  sseClients.add(res);
+
+  // 心跳保持连接
+  const heartbeat = setInterval(() => {
+    res.write(`: heartbeat\n\n`);
+  }, 30000);
+
+  // 清理连接
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    sseClients.delete(res);
+  });
+}
+
+/**
+ * 广播日志到所有 SSE 客户端
+ *
+ * @param {Object} logEntry - 日志条目
+ */
+export function broadcastLog(logEntry) {
+  if (sseClients.size === 0) return;
+
+  const data = JSON.stringify({
+    type: 'log',
+    log: {
+      id: logEntry.id,
+      timestamp: logEntry.timestamp,
+      model: logEntry.model,
+      success: logEntry.success,
+      status: logEntry.status,
+      durationMs: logEntry.durationMs,
+      path: logEntry.path,
+      method: logEntry.method,
+      message: logEntry.message
+    }
+  });
+
+  sseClients.forEach(client => {
+    try {
+      client.write(`data: ${data}\n\n`);
+    } catch {
+      sseClients.delete(client);
+    }
+  });
+}
+
 export default {
   // 登录/登出
   renderLoginPage,
@@ -947,6 +1137,12 @@ export default {
   getLogs,
   clearAllLogs,
   getLogById,
+  // 数据库管理
+  getDbStatsApi,
+  cleanupLogsApi,
+  exportLogsApi,
+  liveLogsApi,
+  broadcastLog,
   // 额度查询
   getQuotaList,
   getQuotaAll,

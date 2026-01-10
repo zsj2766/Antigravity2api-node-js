@@ -5,6 +5,12 @@ import { gzipSync, gunzipSync } from 'zlib';
 import { fileURLToPath } from 'url';
 import config from '../config/config.js';
 
+// SQLite 兼容层：新日志写入 SQLite，保留文件存储读取兼容
+import * as sqliteStore from './log_store_sqlite.js';
+
+// 是否启用 SQLite 存储（默认启用）
+const USE_SQLITE = true;
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -170,6 +176,12 @@ export function readLogs() {
 }
 
 export function appendLog(entry) {
+  // 委托到 SQLite 存储
+  if (USE_SQLITE) {
+    return sqliteStore.appendLog(entry);
+  }
+
+  // 原有文件存储逻辑（保留作为降级备选）
   if (!entry) return null;
 
   const trackUsage = entry.trackUsage !== false;
@@ -207,7 +219,16 @@ export function appendLog(entry) {
   return mergedEntry;
 }
 
-export function getRecentLogs(limit = 200) {
+export function getRecentLogs(options = {}) {
+  // 委托到 SQLite 存储
+  if (USE_SQLITE) {
+    // 兼容旧调用方式：getRecentLogs(limit) -> getRecentLogs({ limit })
+    const opts = typeof options === 'number' ? { limit: options } : options;
+    return sqliteStore.getRecentLogs(opts);
+  }
+
+  // 原有文件存储逻辑
+  const limit = typeof options === 'number' ? options : (options.limit || 200);
   const logs = readLogs().filter(log => !log.usageOnly);
   const list = !limit || Number.isNaN(limit) ? logs : logs.slice(-limit);
   return list
@@ -216,6 +237,12 @@ export function getRecentLogs(limit = 200) {
 }
 
 export function getLogDetail(id) {
+  // 委托到 SQLite 存储
+  if (USE_SQLITE) {
+    return sqliteStore.getLogDetail(id);
+  }
+
+  // 原有文件存储逻辑
   if (!id) return null;
   const logs = readLogs();
   const found = logs.find(log => log.id === id);
@@ -225,6 +252,12 @@ export function getLogDetail(id) {
 }
 
 export function getUsageCountsWithinWindow(windowMs = 60 * 60 * 1000) {
+  // 委托到 SQLite 存储
+  if (USE_SQLITE) {
+    return sqliteStore.getUsageCountsWithinWindow(windowMs);
+  }
+
+  // 原有文件存储逻辑
   const since = Date.now() - Math.abs(windowMs);
   const summary = {};
 
@@ -252,6 +285,12 @@ export function getUsageCountsWithinWindow(windowMs = 60 * 60 * 1000) {
 }
 
 export function getUsageCountSince(projectId, sinceTimestampMs) {
+  // 委托到 SQLite 存储
+  if (USE_SQLITE) {
+    return sqliteStore.getUsageCountSince(projectId, sinceTimestampMs);
+  }
+
+  // 原有文件存储逻辑
   if (!projectId) return 0;
 
   const since = Number.isFinite(Number(sinceTimestampMs))
@@ -270,7 +309,12 @@ export function getUsageCountSince(projectId, sinceTimestampMs) {
 }
 
 export function getRecentTokenStats() {
-  // 按照时间正序重放日志以重建状态
+  // 委托到 SQLite 存储
+  if (USE_SQLITE) {
+    return sqliteStore.getRecentTokenStats();
+  }
+
+  // 原有文件存储逻辑：按照时间正序重放日志以重建状态
   const logs = readLogs().sort((a, b) => {
     const tA = Date.parse(a.timestamp) || 0;
     const tB = Date.parse(b.timestamp) || 0;
@@ -308,6 +352,12 @@ export function getRecentTokenStats() {
 }
 
 export function getUsageSummary() {
+  // 委托到 SQLite 存储
+  if (USE_SQLITE) {
+    return sqliteStore.getUsageSummary();
+  }
+
+  // 原有文件存储逻辑
   const logs = readLogs();
   const summary = {};
 
@@ -342,6 +392,12 @@ export function getUsageSummary() {
 }
 
 export function clearLogs() {
+  // 委托到 SQLite 存储
+  if (USE_SQLITE) {
+    return sqliteStore.clearLogs();
+  }
+
+  // 原有文件存储逻辑
   try {
     // 根据索引文件记录的 detailRef 做一次定向清理
     if (fs.existsSync(LOG_FILE)) {
@@ -389,6 +445,47 @@ export function clearLogs() {
     return true;
   } catch {
     return false;
+  }
+}
+
+// ========== SQLite 特有功能导出 ==========
+
+/**
+ * 获取数据库统计信息
+ */
+export function getDbStats() {
+  if (USE_SQLITE) {
+    return sqliteStore.getDbStats();
+  }
+  return null;
+}
+
+/**
+ * 清理过期日志
+ */
+export function cleanupOldLogs() {
+  if (USE_SQLITE) {
+    return sqliteStore.cleanupOldLogs();
+  }
+  return 0;
+}
+
+/**
+ * 获取日志总数
+ */
+export function getLogCount(options = {}) {
+  if (USE_SQLITE) {
+    return sqliteStore.getLogCount(options);
+  }
+  return readLogs().filter(log => !log.usageOnly).length;
+}
+
+/**
+ * 关闭数据库连接
+ */
+export function closeDb() {
+  if (USE_SQLITE) {
+    return sqliteStore.closeDb();
   }
 }
 

@@ -188,15 +188,57 @@
           <button id="logsClearBtn" class="refresh-btn">🗑 清空日志</button>
         </div>
       </div>
-      <div class="logs-body">
-        <div class="pagination-bar logs-pagination">
-          <div id="logPaginationInfo" class="pagination-info">加载中...</div>
-          <div class="pagination-controls">
-            <button id="logPrevPageBtn" class="mini-btn">上一页</button>
-            <button id="logNextPageBtn" class="mini-btn">下一页</button>
+      <div class="sub-tabs">
+        <button class="sub-tab-btn active" data-subtab-target="list">日志列表</button>
+        <button class="sub-tab-btn" data-subtab-target="live">实时控制台</button>
+        <button class="sub-tab-btn" data-subtab-target="db">数据库管理</button>
+      </div>
+
+      <div class="sub-tab-content active" data-subtab="list">
+        <div class="logs-body">
+          <div class="pagination-bar logs-pagination">
+            <div id="logPaginationInfo" class="pagination-info">加载中...</div>
+            <div class="pagination-controls">
+              <button id="logPrevPageBtn" class="mini-btn">上一页</button>
+              <button id="logNextPageBtn" class="mini-btn">下一页</button>
+            </div>
+          </div>
+          <div id="logs" class="logs">加载中...</div>
+        </div>
+      </div>
+
+      <div class="sub-tab-content" data-subtab="live">
+        <div class="console-wrapper">
+          <div class="console-header">
+            <span class="console-status"><span class="status-dot"></span> <span id="consoleStatusText">未连接</span></span>
+            <div class="console-actions">
+               <button id="clearConsoleBtn" class="mini-btn">清空</button>
+               <label class="checkbox-row" style="margin:0;color:#ccc;"><input type="checkbox" id="autoScrollConsole" checked> 自动滚动</label>
+            </div>
+          </div>
+          <div id="liveConsole" class="console-terminal">
+            <div class="console-line system">等待连接...</div>
           </div>
         </div>
-        <div id="logs" class="logs">加载中...</div>
+      </div>
+
+      <div class="sub-tab-content" data-subtab="db">
+        <div class="db-management-panel">
+          <div class="db-stats-grid" id="dbStatsGrid">
+            加载统计信息...
+          </div>
+
+          <div class="db-actions-card">
+            <h3>数据维护</h3>
+            <p>导出或清理旧日志以释放空间。</p>
+            <div class="action-row">
+              <button id="exportJsonBtn" class="refresh-btn">📥 导出 JSON</button>
+              <button id="exportCsvBtn" class="refresh-btn">📥 导出 CSV</button>
+              <button id="cleanupDbBtn" class="danger-btn">🗑 清理旧日志</button>
+            </div>
+            <p class="hint-text">默认清理策略：保留最近 <span id="retentionDays">7</span> 天的日志。</p>
+          </div>
+        </div>
       </div>
     </section>
 

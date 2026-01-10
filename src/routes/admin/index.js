@@ -42,7 +42,11 @@ import {
   getQuotaList,
   getQuotaAll,
   getSingleTokenQuota,
-  getTokenStats
+  getTokenStats,
+  getDbStatsApi,
+  cleanupLogsApi,
+  exportLogsApi,
+  liveLogsApi
 } from '../../controllers/adminController.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -64,6 +68,10 @@ router.get('/panel-config', requirePanelAuthApi, getPanelConfig);
 router.get('/logs/usage', requirePanelAuthApi, getUsageStats);
 router.get('/logs/settings', requirePanelAuthApi, getLogSettings);
 router.post('/logs/settings', requirePanelAuthApi, updateLogSettings);
+router.get('/logs/stats', requirePanelAuthApi, getDbStatsApi);
+router.post('/logs/cleanup', requirePanelAuthApi, cleanupLogsApi);
+router.get('/logs/export', requirePanelAuthApi, exportLogsApi);
+router.get('/logs/live', requirePanelAuthApi, liveLogsApi);
 router.get('/logs', requirePanelAuthApi, getLogs);
 router.post('/logs/clear', requirePanelAuthApi, clearAllLogs);
 router.get('/logs/:id', requirePanelAuthApi, getLogById);

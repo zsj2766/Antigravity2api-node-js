@@ -1732,6 +1732,7 @@ if (settingsGrid) {
 
 refreshAccounts();
 initLogFilters();
+initLogSubTabs();
 loadLogs();
 loadHourlyUsage();
 loadSettings();
@@ -1890,6 +1891,193 @@ if (quotaModal) {
   quotaModal.addEventListener('click', (e) => {
     if (e.target === quotaModal) closeQuotaModalFn();
   });
+}
+
+// ========== 日志子标签页功能 ==========
+let liveEventSource = null;
+let isConsoleActive = false;
+let dbStatsLoaded = false;
+
+function initLogSubTabs() {
+  const subTabBtns = document.querySelectorAll('.sub-tab-btn');
+  const subTabContents = document.querySelectorAll('.sub-tab-content');
+
+  subTabBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const target = btn.dataset.subtabTarget;
+
+      // Update active state
+      subTabBtns.forEach(b => b.classList.toggle('active', b === btn));
+      subTabContents.forEach(c => c.classList.toggle('active', c.dataset.subtab === target));
+
+      // Handle specific tab logic
+      if (target === 'live') {
+        startLiveConsole();
+      } else {
+        stopLiveConsole();
+      }
+
+      if (target === 'db') {
+        loadDbStats();
+      }
+    });
+  });
+
+  // Init console controls
+  const clearBtn = document.getElementById('clearConsoleBtn');
+  const autoScrollChbox = document.getElementById('autoScrollConsole');
+  if (clearBtn) clearBtn.addEventListener('click', () => {
+    const term = document.getElementById('liveConsole');
+    if (term) term.innerHTML = '';
+  });
+  if (autoScrollChbox) autoScrollChbox.addEventListener('change', (e) => {
+    // console auto scroll state is read from checkbox directly
+  });
+
+  // Init DB controls
+  document.getElementById('exportJsonBtn')?.addEventListener('click', () => window.open('/admin/logs/export?format=json'));
+  document.getElementById('exportCsvBtn')?.addEventListener('click', () => window.open('/admin/logs/export?format=csv'));
+  document.getElementById('cleanupDbBtn')?.addEventListener('click', handleDbCleanup);
+}
+
+// ========== 实时控制台功能 ==========
+function startLiveConsole() {
+  if (liveEventSource || isConsoleActive) return;
+  isConsoleActive = true;
+
+  const terminal = document.getElementById('liveConsole');
+  const statusDot = document.querySelector('.status-dot');
+  const statusText = document.getElementById('consoleStatusText');
+  const autoScrollInfo = document.getElementById('autoScrollConsole');
+
+  const appendLine = (text, type = 'info') => {
+    if (!terminal) return;
+    const div = document.createElement('div');
+    div.className = `console-line ${type}`;
+    const ts = new Date().toLocaleTimeString();
+    div.innerHTML = `<span class="ts">[${ts}]</span>${escapeHtml(text)}`;
+    terminal.appendChild(div);
+
+    // Limit lines (max 500)
+    if (terminal.childElementCount > 500) {
+      terminal.removeChild(terminal.firstChild);
+    }
+
+    if (autoScrollInfo?.checked) {
+      terminal.scrollTop = terminal.scrollHeight;
+    }
+  };
+
+  try {
+    liveEventSource = new EventSource('/admin/logs/live');
+
+    liveEventSource.onopen = () => {
+      if (statusDot) statusDot.className = 'status-dot connected';
+      if (statusText) statusText.textContent = '已连接';
+      appendLine('已连接到实时日志流...', 'system');
+    };
+
+    liveEventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'connected') return;
+
+        if (data.type === 'log' && data.log) {
+          const l = data.log;
+          const msg = `${l.method} ${l.path} - ${l.status} (${l.durationMs}ms) ${l.model || ''}`;
+          appendLine(msg, l.success ? 'info' : 'error');
+        }
+      } catch (e) {
+        // ignore parse error
+      }
+    };
+
+    liveEventSource.onerror = () => {
+      if (statusDot) statusDot.className = 'status-dot disconnected';
+      if (statusText) statusText.textContent = '连接断开，尝试重连...';
+      liveEventSource.close();
+      liveEventSource = null;
+      isConsoleActive = false;
+      // Auto reconnect after 2s if tab is still active
+      setTimeout(() => {
+        const activeTab = document.querySelector('.sub-tab-btn[data-subtab-target="live"]');
+        if (activeTab && activeTab.classList.contains('active')) {
+          startLiveConsole();
+        }
+      }, 2000);
+    };
+  } catch (e) {
+    appendLine('无法建立连接: ' + e.message, 'error');
+  }
+}
+
+function stopLiveConsole() {
+  if (liveEventSource) {
+    liveEventSource.close();
+    liveEventSource = null;
+  }
+  isConsoleActive = false;
+  const statusDot = document.querySelector('.status-dot');
+  const statusText = document.getElementById('consoleStatusText');
+  if (statusDot) statusDot.className = 'status-dot';
+  if (statusText) statusText.textContent = '未连接';
+}
+
+// ========== 数据库管理功能 ==========
+async function loadDbStats() {
+  const grid = document.getElementById('dbStatsGrid');
+  if (!grid) return;
+
+  grid.innerHTML = '<div class="quota-loading">加载统计信息...</div>';
+
+  try {
+    const res = await fetchJson('/admin/logs/stats');
+    if (!res.success) throw new Error('Failed to load stats');
+
+    const s = res.stats || {};
+    document.getElementById('retentionDays').textContent = s.retentionDays || 7;
+
+    grid.innerHTML = `
+      <div class="db-stat-card">
+        <div class="db-stat-label">总日志数</div>
+        <div class="db-stat-value">${s.totalLogs?.toLocaleString() || 0}</div>
+      </div>
+      <div class="db-stat-card">
+        <div class="db-stat-label">数据库大小</div>
+        <div class="db-stat-value">${s.dbSizeMB || 0} MB</div>
+      </div>
+      <div class="db-stat-card">
+        <div class="db-stat-label">保留天数</div>
+        <div class="db-stat-value">${s.retentionDays || 7} 天</div>
+      </div>
+      <div class="db-stat-card">
+        <div class="db-stat-label">日志级别</div>
+        <div class="db-stat-value" style="font-size:18px">${s.pipelineLogLevel || 'ALL'}</div>
+      </div>
+    `;
+  } catch (e) {
+    grid.innerHTML = `<div class="quota-error">加载失败: ${e.message}</div>`;
+  }
+}
+
+async function handleDbCleanup() {
+  if (!confirm('确定要手动清理过期日志吗？这将删除所有超过保留期限的日志。')) return;
+
+  const btn = document.getElementById('cleanupDbBtn');
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '清理中...';
+
+  try {
+    const res = await fetchJson('/admin/logs/cleanup', { method: 'POST' });
+    alert(`清理完成，共删除 ${res.deleted} 条旧日志。`);
+    loadDbStats();
+  } catch (e) {
+    alert('清理失败: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
 }
 
 // ========== 冻结历史功能 ==========

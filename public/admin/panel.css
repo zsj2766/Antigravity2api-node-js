@@ -2285,3 +2285,154 @@ button:disabled {
   max-height: 70vh;
   overflow-y: auto;
 }
+
+/* 日志子标签页样式 */
+.sub-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 0 4px 12px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 16px;
+}
+
+.sub-tab-btn {
+  background: transparent;
+  color: var(--muted);
+  border: none;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.sub-tab-btn:hover {
+  background: var(--subtle-bg);
+  color: var(--text);
+}
+
+.sub-tab-btn.active {
+  background: var(--accent-bg);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.sub-tab-content {
+  display: none;
+}
+
+.sub-tab-content.active {
+  display: block;
+  animation: fadeIn 0.2s ease;
+}
+
+/* 实时控制台样式 */
+.console-wrapper {
+  background: #1e1e1e;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #333;
+}
+
+.console-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 12px;
+  background: #252526;
+  border-bottom: 1px solid #333;
+}
+
+.console-status {
+  color: #ccc;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #666;
+}
+
+.status-dot.connected { background: #4caf50; box-shadow: 0 0 6px rgba(76, 175, 80, 0.4); }
+.status-dot.disconnected { background: #f44336; }
+
+.console-terminal {
+  height: 500px;
+  overflow-y: auto;
+  padding: 10px;
+  font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #d4d4d4;
+  scroll-behavior: smooth;
+}
+
+.console-line {
+  margin-bottom: 2px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  padding-left: 14px;
+  text-indent: -14px;
+}
+
+.console-line.system { color: #6a9955; }
+.console-line.error { color: #f48771; }
+.console-line.info { color: #569cd6; }
+.console-line .ts { color: #808080; margin-right: 8px; user-select: none; }
+
+/* 数据库管理样式 */
+.db-management-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.db-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+}
+
+.db-stat-card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+  text-align: center;
+}
+
+.db-stat-value {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--accent-text);
+  margin: 8px 0;
+}
+
+.db-stat-label {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.db-actions-card {
+  background: var(--subtle-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px;
+}
+
+.db-actions-card h3 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+
+.hint-text {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 12px;
+}

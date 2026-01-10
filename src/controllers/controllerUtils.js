@@ -17,6 +17,15 @@ import tokenManager from '../auth/token_manager.js';
 import { saveBase64Image } from '../utils/imageStorage.js';
 import { getAvailableModels } from '../api/client.js';
 import { getUsageCountsWithinWindow, appendLog } from '../utils/log_store.js';
+import { createPipelineContext, noopPipelineContext } from '../utils/pipelineContext.js';
+import config from '../config/config.js';
+
+/**
+ * 获取 Pipeline 日志级别
+ */
+function getPipelineLogLevel() {
+  return (config.logging?.pipelineLogLevel || 'full').toLowerCase();
+}
 
 /**
  * 将 Gemini 响应中的 inlineData 落地为 URL
@@ -206,6 +215,7 @@ export function formatRetryMessage(error, delayMs) {
  *
  * 生成一个绑定了请求上下文的日志写入函数。
  * 支持动态更新 token 和 model，适用于重试场景。
+ * 集成 Pipeline 追踪功能。
  *
  * @param {Object} context - 请求上下文
  * @param {import('express').Request} context.req - Express 请求
@@ -214,7 +224,7 @@ export function formatRetryMessage(error, delayMs) {
  * @param {Object} context.requestSnapshot - 请求快照
  * @param {string} [context.correlationId] - 请求关联 ID
  * @param {string} [context.model] - 模型名称（可覆盖 req.body.model）
- * @returns {{ writeLog: Function, setToken: Function, setModel: Function }}
+ * @returns {{ writeLog: Function, setToken: Function, setModel: Function, pipeline: PipelineContext }}
  */
 export function createLogWriter(context) {
   const { req, res, startedAt, requestSnapshot, correlationId, model: initialModel } = context;
@@ -222,6 +232,12 @@ export function createLogWriter(context) {
   // 可变状态：支持在重试过程中更新
   let currentToken = null;
   let currentModel = initialModel || req.body?.model || req.params?.model || 'unknown';
+
+  // 创建 Pipeline 追踪上下文
+  const pipelineLevel = getPipelineLogLevel();
+  const pipeline = pipelineLevel === 'off'
+    ? noopPipelineContext
+    : createPipelineContext(correlationId || `req-${Date.now()}`);
 
   const writeLog = ({
     success,
@@ -254,7 +270,9 @@ export function createLogWriter(context) {
           rawBody: rawResponse,
           modelOutput: responseSummary
         }
-      }
+      },
+      // 添加 Pipeline 追踪数据
+      pipeline: pipeline.toLogEntry ? pipeline.toLogEntry() : null
     };
 
     // 仅在有值时添加可选字段
@@ -283,12 +301,21 @@ export function createLogWriter(context) {
         error: success ? undefined : message
       });
     }
+
+    // 输出 Pipeline 摘要（如果有）
+    if (pipeline.getSummary && pipelineLevel === 'full') {
+      const summary = pipeline.getSummary();
+      if (summary) {
+        logger.debug(summary);
+      }
+    }
   };
 
   return {
     writeLog,
     setToken: (token) => { currentToken = token; },
-    setModel: (model) => { currentModel = model; }
+    setModel: (model) => { currentModel = model; },
+    pipeline
   };
 }
 
