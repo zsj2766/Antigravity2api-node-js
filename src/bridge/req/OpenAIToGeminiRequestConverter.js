@@ -231,50 +231,36 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
       }
       parts.push(thoughtPart);
     } else if (enableThinking) {
-      // 当启用 thinking 但没有 reasoning_content 时，尝试从 content 数组中查找 thinking 块
-      // 这是为了确保 Antigravity 后端转换为 Claude 格式时能正确生成 thinking block
-      // Claude API 要求：启用 thinking 后，所有 assistant 消息必须以 thinking 开头
-      let thinkingText = null;
-      let thinkingSignature = null;
+      // 与 CLIProxyAPI 保持一致：OpenAI 格式的 assistant 消息不添加 thinking 占位符
+      // CLIProxyAPI antigravity_openai_request.go:248-276 中，assistant 消息只处理：
+      // - 字符串 content
+      // - 数组 content 中的 image_url
+      // - tool_calls
+      // 完全不处理 thinking/reasoning_content，也不添加占位符
+      // Antigravity 后端会根据需要处理 thinking 块的要求
 
-      // 尝试从 content 数组中查找 thinking 类型的块
+      // 但如果 content 数组中确实有 thinking 块（带有效签名），则提取它
       if (Array.isArray(message.content)) {
         for (const item of message.content) {
-          if (item?.type === 'thinking' && item.thinking) {
-            thinkingText = item.thinking;
-            thinkingSignature = item.signature;
+          if (item?.type === 'thinking' && item.thinking && item.signature) {
+            // 只有当有有效签名时才添加 thinking 块
+            parts.push({
+              text: item.thinking,
+              thought: true,
+              thoughtSignature: item.signature
+            });
             break;
-          } else if (item?.type === 'redacted_thinking') {
-            // redacted_thinking: 使用 [redacted] 作为文本，签名从 data 字段获取
-            thinkingText = '[redacted]';
-            thinkingSignature = item.data || item.signature;
+          } else if (item?.type === 'redacted_thinking' && item.data && item.data.length >= 50) {
+            // redacted_thinking 需要有效签名（至少 50 字符）
+            parts.push({
+              text: '[redacted]',
+              thought: true,
+              thoughtSignature: item.data
+            });
             break;
           }
         }
       }
-
-      // 如果找到了 thinking 内容，使用它；否则使用 [redacted] 占位符
-      const text = thinkingText || '[redacted]';
-      const thoughtPart = {
-        text,
-        thought: true
-      };
-
-      // 签名优先级：1. 透传签名 2. 缓存签名 3. SKIP
-      if (thinkingSignature) {
-        thoughtPart.thoughtSignature = thinkingSignature;
-      } else if (thinkingText) {
-        const cached = getTextThoughtSignature(thinkingText);
-        if (cached?.signature) {
-          thoughtPart.thoughtSignature = cached.signature;
-        } else {
-          thoughtPart.thoughtSignature = THOUGHT_SIGNATURE_SKIP;
-        }
-      } else {
-        thoughtPart.thoughtSignature = THOUGHT_SIGNATURE_SKIP;
-      }
-
-      parts.push(thoughtPart);
     }
 
     // 处理 content（与 CLIProxyAPI 完全一致）
