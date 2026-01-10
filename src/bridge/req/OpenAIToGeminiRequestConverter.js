@@ -244,6 +244,11 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
             thinkingText = item.thinking;
             thinkingSignature = item.signature;
             break;
+          } else if (item?.type === 'redacted_thinking') {
+            // redacted_thinking: 使用 [redacted] 作为文本，签名从 data 字段获取
+            thinkingText = '[redacted]';
+            thinkingSignature = item.data || item.signature;
+            break;
           }
         }
       }
