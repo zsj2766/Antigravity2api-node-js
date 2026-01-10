@@ -202,7 +202,7 @@ const SETTINGS_DEFINITIONS = [
     key: 'API_USER_AGENT',
     label: 'User-Agent',
     category: '服务与网络',
-    defaultValue: 'antigravity/1.11.3 windows/amd64',
+    defaultValue: 'antigravity/1.104.0 windows/amd64',
     valueResolver: cfg => cfg.api.userAgent
   },
   {

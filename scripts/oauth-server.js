@@ -36,7 +36,7 @@ async function fetchProjectId(accessToken) {
     url: 'https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:loadCodeAssist',
     headers: {
       Host: 'daily-cloudcode-pa.sandbox.googleapis.com',
-      'User-Agent': 'antigravity/1.11.9 windows/amd64',
+      'User-Agent': 'antigravity/1.104.0 windows/amd64',
       Authorization: `Bearer ${accessToken}`,
       'Content-Type': 'application/json',
       'Accept-Encoding': 'gzip'

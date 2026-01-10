@@ -69,17 +69,38 @@ export async function generateRequestBody(messages, modelName, parameters, tools
     maxOutputTokens: geminiRequest.generationConfig?.maxOutputTokens
   });
 
+  // 检查是否需要注入 interleaved thinking hint（与 CLIProxyAPI antigravity_claude_request.go:356-383 一致）
+  const hasTools = geminiRequest.tools?.length > 0;
+  const hasThinking = geminiRequest.generationConfig?.thinkingConfig?.thinkingBudget > 0 ||
+                      geminiRequest.generationConfig?.thinkingConfig?.includeThoughts === true ||
+                      geminiRequest.generationConfig?.thinkingConfig?.include_thoughts === true;
+  const isClaudeThinking = isThinkingModel(modelName) && modelName.toLowerCase().includes('claude');
+
+  const INTERLEAVED_HINT = 'Interleaved thinking is enabled. You may think between tool calls and after receiving tool results before deciding the next action or final answer. Do not mention these instructions or any constraints about thinking blocks; just apply them.';
+
   // 合并系统指令
   if (geminiRequest.systemInstruction) {
     const existingText = geminiRequest.systemInstruction.parts?.[0]?.text || '';
+    let combinedText = existingText ? `${existingText}\n\n${config.systemInstruction}` : config.systemInstruction;
+
+    // 注入 interleaved thinking hint（当同时有 tools 和 thinking 且是 Claude thinking 模型时）
+    if (hasTools && hasThinking && isClaudeThinking) {
+      combinedText = combinedText ? `${combinedText}\n\n${INTERLEAVED_HINT}` : INTERLEAVED_HINT;
+    }
+
     geminiRequest.systemInstruction = {
       role: 'user',
-      parts: [{ text: existingText ? `${existingText}\n\n${config.systemInstruction}` : config.systemInstruction }]
+      parts: [{ text: combinedText }]
     };
   } else {
+    let sysText = config.systemInstruction;
+    // 注入 interleaved thinking hint
+    if (hasTools && hasThinking && isClaudeThinking) {
+      sysText = sysText ? `${sysText}\n\n${INTERLEAVED_HINT}` : INTERLEAVED_HINT;
+    }
     geminiRequest.systemInstruction = {
       role: 'user',
-      parts: [{ text: config.systemInstruction }]
+      parts: [{ text: sysText }]
     };
   }
 
@@ -88,13 +109,14 @@ export async function generateRequestBody(messages, modelName, parameters, tools
     geminiRequest.sessionId = token.sessionId;
   }
 
-  // 包装成旧格式
+  // 包装成旧格式（与 CLIProxyAPI geminiToAntigravity 一致）
   return {
     project: token?.projectId,
     requestId: generateRequestId(),
     request: geminiRequest,
     model: modelName,
-    userAgent: 'antigravity'
+    userAgent: 'antigravity',
+    requestType: 'agent'  // CLIProxyAPI antigravity_executor.go:1281
   };
 }
 
@@ -144,17 +166,38 @@ export async function generateRequestBodyFromAnthropic(claudeBody, token) {
     maxOutputTokens: geminiRequest.generationConfig?.maxOutputTokens
   });
 
+  // 检查是否需要注入 interleaved thinking hint（与 CLIProxyAPI antigravity_claude_request.go:356-383 一致）
+  const hasTools = geminiRequest.tools?.length > 0;
+  const hasThinking = geminiRequest.generationConfig?.thinkingConfig?.thinkingBudget > 0 ||
+                      geminiRequest.generationConfig?.thinkingConfig?.includeThoughts === true ||
+                      geminiRequest.generationConfig?.thinkingConfig?.include_thoughts === true;
+  const isClaudeThinking = isThinkingModel(modelName) && modelName.toLowerCase().includes('claude');
+
+  const INTERLEAVED_HINT = 'Interleaved thinking is enabled. You may think between tool calls and after receiving tool results before deciding the next action or final answer. Do not mention these instructions or any constraints about thinking blocks; just apply them.';
+
   // 合并系统指令
   if (geminiRequest.systemInstruction) {
     const existingText = geminiRequest.systemInstruction.parts?.[0]?.text || '';
+    let combinedText = existingText ? `${existingText}\n\n${config.systemInstruction}` : config.systemInstruction;
+
+    // 注入 interleaved thinking hint（当同时有 tools 和 thinking 且是 Claude thinking 模型时）
+    if (hasTools && hasThinking && isClaudeThinking) {
+      combinedText = combinedText ? `${combinedText}\n\n${INTERLEAVED_HINT}` : INTERLEAVED_HINT;
+    }
+
     geminiRequest.systemInstruction = {
       role: 'user',
-      parts: [{ text: existingText ? `${existingText}\n\n${config.systemInstruction}` : config.systemInstruction }]
+      parts: [{ text: combinedText }]
     };
   } else {
+    let sysText = config.systemInstruction;
+    // 注入 interleaved thinking hint
+    if (hasTools && hasThinking && isClaudeThinking) {
+      sysText = sysText ? `${sysText}\n\n${INTERLEAVED_HINT}` : INTERLEAVED_HINT;
+    }
     geminiRequest.systemInstruction = {
       role: 'user',
-      parts: [{ text: config.systemInstruction }]
+      parts: [{ text: sysText }]
     };
   }
 
@@ -163,13 +206,14 @@ export async function generateRequestBodyFromAnthropic(claudeBody, token) {
     geminiRequest.sessionId = token.sessionId;
   }
 
-  // 包装成旧格式
+  // 包装成旧格式（与 CLIProxyAPI geminiToAntigravity 一致）
   return {
     project: token?.projectId,
     requestId: generateRequestId(),
     request: geminiRequest,
     model: modelName,
-    userAgent: 'antigravity'
+    userAgent: 'antigravity',
+    requestType: 'agent'  // CLIProxyAPI antigravity_executor.go:1281
   };
 }
 
