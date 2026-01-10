@@ -585,6 +585,23 @@ export class ClaudeToGeminiRequestConverter extends IRequestConverter {
       }
     }
 
+    // 重排序 parts：确保 thinking blocks 在最前面（非 originalContent 路径）
+    // 参考 CLIProxyAPI antigravity_claude_request.go:276-304
+    if (parts.length > 1) {
+      const thinkingParts = [];
+      const otherParts = [];
+      for (const part of parts) {
+        if (part && part.thought === true) {
+          thinkingParts.push(part);
+        } else {
+          otherParts.push(part);
+        }
+      }
+      if (thinkingParts.length > 0 && parts[0]?.thought !== true) {
+        parts = [...thinkingParts, ...otherParts];
+      }
+    }
+
     if (parts.length === 0) {
       return;
     }
@@ -726,6 +743,28 @@ export class ClaudeToGeminiRequestConverter extends IRequestConverter {
 
         default:
           break;
+      }
+    }
+
+    // 重排序 parts：确保 thinking blocks 在最前面
+    // 参考 CLIProxyAPI antigravity_claude_request.go:276-304
+    // 解决 "Expected thinking or redacted_thinking, but found tool_use" 错误
+    const thinkingParts = [];
+    const otherParts = [];
+
+    for (const part of parts) {
+      if (part && part.thought === true) {
+        thinkingParts.push(part);
+      } else {
+        otherParts.push(part);
+      }
+    }
+
+    // 如果有 thinking parts 且不在最前面，重新排序
+    if (thinkingParts.length > 0) {
+      const firstPartIsThinking = parts[0]?.thought === true;
+      if (!firstPartIsThinking || thinkingParts.length > 1) {
+        return [...thinkingParts, ...otherParts];
       }
     }
 

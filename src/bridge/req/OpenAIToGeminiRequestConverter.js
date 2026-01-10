@@ -212,53 +212,64 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
     // 必须放在最前面，对应 Claude 的 thinking block 要求
     // 注意：这是对 CLIProxyAPI 的扩展，用于支持多轮 thinking 对话
     if (message.reasoning_content) {
-      const thoughtPart = {
-        text: message.reasoning_content,
-        thought: true  // Gemini 格式的思考标记
-      };
-      // 签名优先级：1. 透传签名 2. 缓存签名 3. SKIP
-      if (message.reasoning_signature) {
-        thoughtPart.thoughtSignature = message.reasoning_signature;
+      // 签名优先级：1. 透传签名 2. 缓存签名
+      let signature = null;
+      if (message.reasoning_signature && message.reasoning_signature.length >= 50) {
+        signature = message.reasoning_signature;
       } else {
         // 尝试从缓存获取签名（按文本内容查找）
         const cached = getTextThoughtSignature(message.reasoning_content);
-        if (cached?.signature) {
-          thoughtPart.thoughtSignature = cached.signature;
-        } else {
-          // 没有签名时使用跳过标记
-          thoughtPart.thoughtSignature = THOUGHT_SIGNATURE_SKIP;
+        if (cached?.signature && cached.signature.length >= 50) {
+          signature = cached.signature;
         }
       }
-      parts.push(thoughtPart);
-    } else if (enableThinking) {
-      // 与 CLIProxyAPI 保持一致：OpenAI 格式的 assistant 消息不添加 thinking 占位符
-      // CLIProxyAPI antigravity_openai_request.go:248-276 中，assistant 消息只处理：
-      // - 字符串 content
-      // - 数组 content 中的 image_url
-      // - tool_calls
-      // 完全不处理 thinking/reasoning_content，也不添加占位符
-      // Antigravity 后端会根据需要处理 thinking 块的要求
 
-      // 但如果 content 数组中确实有 thinking 块（带有效签名），则提取它
-      if (Array.isArray(message.content)) {
-        for (const item of message.content) {
-          if (item?.type === 'thinking' && item.thinking && item.signature) {
-            // 只有当有有效签名时才添加 thinking 块
+      // 与 CLIProxyAPI antigravity_claude_request.go:153-162 一致：
+      // 只有当有有效签名时才添加 thinking 块，否则跳过
+      // THOUGHT_SIGNATURE_SKIP 只对 functionCall 有效，对 thinking 块无效
+      if (signature) {
+        parts.push({
+          text: message.reasoning_content,
+          thought: true,
+          thoughtSignature: signature
+        });
+      }
+      // 无有效签名时跳过 thinking 块（不转换为 text，不使用 SKIP）
+    }
+
+    // 处理 content 数组中的 thinking 块（Claude 格式）
+    if (enableThinking && Array.isArray(message.content)) {
+      for (const item of message.content) {
+        if (item?.type === 'thinking' && item.thinking) {
+          // 签名优先级：1. item.signature 2. 缓存签名
+          let signature = null;
+          if (item.signature && item.signature.length >= 50) {
+            signature = item.signature;
+          } else {
+            const cached = getTextThoughtSignature(item.thinking);
+            if (cached?.signature && cached.signature.length >= 50) {
+              signature = cached.signature;
+            }
+          }
+
+          // 只有有效签名时才添加
+          if (signature) {
             parts.push({
               text: item.thinking,
               thought: true,
-              thoughtSignature: item.signature
-            });
-            break;
-          } else if (item?.type === 'redacted_thinking' && item.data && item.data.length >= 50) {
-            // redacted_thinking 需要有效签名（至少 50 字符）
-            parts.push({
-              text: '[redacted]',
-              thought: true,
-              thoughtSignature: item.data
+              thoughtSignature: signature
             });
             break;
           }
+          // 无效签名时跳过（与 CLIProxyAPI 一致）
+        } else if (item?.type === 'redacted_thinking' && item.data && item.data.length >= 50) {
+          // redacted_thinking 的 data 字段本身就是签名
+          parts.push({
+            text: '[redacted]',
+            thought: true,
+            thoughtSignature: item.data
+          });
+          break;
         }
       }
     }
@@ -443,14 +454,15 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
   }
 
   /**
-   * 为工具调用添加 thoughtSignature（不注入假 thinking 块）
+   * 为工具调用添加 thoughtSignature 并重排序 parts（thinking 块在最前面）
+   *
+   * 参考 CLIProxyAPI antigravity_claude_request.go:276-304:
+   * - 重排序 parts，确保 thinking block 在最前面（解决 "Expected thinking, found tool_use" 错误）
    *
    * 参考 CLIProxyAPI antigravity_claude_request.go:184-216:
-   * "Do NOT inject dummy thinking blocks here. Antigravity API validates signatures,
-   * so dummy values are rejected."
-   *
-   * 与 CLIProxyAPI 保持一致：无条件为 functionCall 和 inlineData 添加 thoughtSignature，
-   * 不注入假的 thinking 块（避免 Gemini→Claude 转换时格式错误）
+   * - 无条件为 functionCall 添加 thoughtSignature
+   * - "Do NOT inject dummy thinking blocks here. Antigravity API validates signatures,
+   *    so dummy values are rejected."
    */
   ensureThinkingPrefixForToolCalls(contents) {
     if (!Array.isArray(contents)) return;
@@ -464,6 +476,27 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
       for (const part of content.parts) {
         if (part && (part.functionCall || part.inlineData) && !part.thoughtSignature) {
           part.thoughtSignature = THOUGHT_SIGNATURE_SKIP;
+        }
+      }
+
+      // 重排序 parts：确保 thinking blocks 在最前面
+      // 参考 CLIProxyAPI antigravity_claude_request.go:276-304
+      const thinkingParts = [];
+      const otherParts = [];
+
+      for (const part of content.parts) {
+        if (part && part.thought === true) {
+          thinkingParts.push(part);
+        } else {
+          otherParts.push(part);
+        }
+      }
+
+      // 如果有 thinking parts 且不在最前面，重新排序
+      if (thinkingParts.length > 0) {
+        const firstPartIsThinking = content.parts[0]?.thought === true;
+        if (!firstPartIsThinking || thinkingParts.length > 1) {
+          content.parts = [...thinkingParts, ...otherParts];
         }
       }
     }
