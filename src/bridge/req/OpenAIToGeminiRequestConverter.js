@@ -16,7 +16,8 @@ import {
   DATA_URL_REGEX,
   DOCUMENT_MIME_TYPES,
   AUDIO_FORMAT_MIME,
-  EXTENSION_MIME_MAP
+  EXTENSION_MIME_MAP,
+  attachDefaultSafetySettings
 } from '../common/index.js';
 import {
   getThoughtSignature,
@@ -83,11 +84,17 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
       requestBody.toolConfig = { functionCallingConfig: toolConfig };
     }
 
-    return requestBody;
+    // 与 CLIProxyAPI 保持一致：附加默认安全设置
+    // 参考: CLIProxyAPI antigravity_openai_request.go:409
+    return attachDefaultSafetySettings(requestBody);
   }
 
   /**
    * 转换消息数组 (OpenAI → Gemini)
+   *
+   * 与 CLIProxyAPI (antigravity_openai_request.go) 保持一致：
+   * 1. First pass: 构建 tool_call ID -> function name 映射表
+   * 2. Second pass: 转换消息
    *
    * @param {Array} messages - OpenAI 消息数组
    * @param {string} modelName - 模型名称
@@ -97,6 +104,20 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
   convertMessages(messages, modelName, enableThinking = false) {
     if (!Array.isArray(messages)) return [];
 
+    // First pass: 构建 tool_call ID -> function name 映射表
+    // 参考: CLIProxyAPI antigravity_openai_request.go:148-166
+    const tcID2Name = new Map();
+    for (const message of messages) {
+      if (message.role === 'assistant' && Array.isArray(message.tool_calls)) {
+        for (const tc of message.tool_calls) {
+          if (tc.type === 'function' && tc.id && tc.function?.name) {
+            tcID2Name.set(tc.id, tc.function.name);
+          }
+        }
+      }
+    }
+
+    // Second pass: 转换消息
     const contents = [];
 
     for (const message of messages) {
@@ -112,7 +133,8 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
         const parts = this.buildAssistantParts(message, modelName, enableThinking);
         contents.push({ role: 'model', parts });
       } else if (message.role === 'tool') {
-        const parts = this.buildToolResultParts(message, contents);
+        // 使用预构建的映射表查找函数名
+        const parts = this.buildToolResultParts(message, contents, tcID2Name);
         contents.push({ role: 'user', parts });
       }
     }
@@ -273,25 +295,31 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
   /**
    * 构建工具结果的 parts (OpenAI → Gemini)
    *
-   * 注意：会分离文本与媒体并附加到 functionResponse 后
+   * 与 CLIProxyAPI 保持一致：使用 first-pass 构建的 tcID2Name 映射表查找函数名
+   * 参考: CLIProxyAPI antigravity_openai_request.go:307-314
    *
    * @param {object} message - OpenAI tool 消息
-   * @param {Array} contents - 已转换的 Gemini contents（用于查找函数名）
+   * @param {Array} contents - 已转换的 Gemini contents（备用查找）
+   * @param {Map} tcID2Name - tool_call ID -> function name 映射表
    * @returns {Array} Gemini functionResponse parts 数组
    */
-  buildToolResultParts(message, contents) {
-    // 查找对应的函数名
-    let functionName = '';
-    for (let i = contents.length - 1; i >= 0; i--) {
-      if (contents[i].role === 'model') {
-        const parts = contents[i].parts;
-        for (const part of parts) {
-          if (part?.functionCall?.id === message.tool_call_id) {
-            functionName = part.functionCall.name;
-            break;
+  buildToolResultParts(message, contents, tcID2Name = new Map()) {
+    // 优先使用 first-pass 构建的映射表（与 CLIProxyAPI 一致）
+    let functionName = tcID2Name.get(message.tool_call_id) || '';
+
+    // 备用：从已转换的 contents 中查找
+    if (!functionName) {
+      for (let i = contents.length - 1; i >= 0; i--) {
+        if (contents[i].role === 'model') {
+          const parts = contents[i].parts;
+          for (const part of parts) {
+            if (part?.functionCall?.id === message.tool_call_id) {
+              functionName = part.functionCall.name;
+              break;
+            }
           }
+          if (functionName) break;
         }
-        if (functionName) break;
       }
     }
 

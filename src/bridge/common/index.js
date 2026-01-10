@@ -34,7 +34,9 @@ export {
   DOCUMENT_MIME_TYPES,
   AUDIO_FORMAT_MIME,
   EXTENSION_MIME_MAP,
-  ANTIGRAVITY_SYSTEM_PREFIX
+  ANTIGRAVITY_SYSTEM_PREFIX,
+  DEFAULT_SAFETY_SETTINGS,
+  attachDefaultSafetySettings
 } from './constants.js';
 
 // SSE Emitter

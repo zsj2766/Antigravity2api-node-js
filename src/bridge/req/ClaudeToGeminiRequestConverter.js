@@ -13,7 +13,8 @@ import {
   normalizeThinkingBudget,
   shouldUseThinkingLevel,
   ANTIGRAVITY_SYSTEM_PREFIX,
-  unpackThinkingText
+  unpackThinkingText,
+  attachDefaultSafetySettings
 } from '../common/index.js';
 import { isThinkingModel, getThoughtSignature, getTextThoughtSignature, safeJsonParse } from '../../utils/utils.js';
 
@@ -113,11 +114,17 @@ export class ClaudeToGeminiRequestConverter extends IRequestConverter {
       requestBody.toolConfig = { functionCallingConfig: toolConfig };
     }
 
-    return requestBody;
+    // 与 CLIProxyAPI 保持一致：附加默认安全设置
+    // 参考: CLIProxyAPI antigravity_claude_request.go (使用 common.AttachDefaultSafetySettings)
+    return attachDefaultSafetySettings(requestBody);
   }
 
   /**
    * 转换消息数组 (Claude → Gemini)
+   *
+   * 与 CLIProxyAPI (antigravity_claude_request.go) 保持一致：
+   * 1. First pass: 构建 tool_use ID -> function name 映射表
+   * 2. Second pass: 转换消息
    *
    * @param {Array} messages - Claude 消息数组
    * @param {string} modelName - 模型名称
@@ -127,14 +134,28 @@ export class ClaudeToGeminiRequestConverter extends IRequestConverter {
   convertMessages(messages, modelName, enableThinking = false) {
     if (!Array.isArray(messages)) return [];
 
+    // First pass: 构建 tool_use ID -> function name 映射表
+    // 参考: CLIProxyAPI antigravity_openai_request.go:148-166 的模式
+    const toolUseID2Name = new Map();
+    for (const message of messages) {
+      if (message.role === 'assistant' && Array.isArray(message.content)) {
+        for (const block of message.content) {
+          if (block.type === 'tool_use' && block.id && block.name) {
+            toolUseID2Name.set(block.id, block.name);
+          }
+        }
+      }
+    }
+
+    // Second pass: 转换消息
     const contents = [];
 
     for (const message of messages) {
       const parsed = this.convertContent(message.content);
 
       if (message.role === 'user') {
-        // 传递原始内容以保持顺序
-        this.handleUserMessage(parsed, contents, enableThinking, message.content);
+        // 传递原始内容以保持顺序，同时传递工具映射表
+        this.handleUserMessage(parsed, contents, enableThinking, message.content, toolUseID2Name);
       } else if (message.role === 'assistant') {
         this.handleAssistantMessage(parsed, contents, modelName, message.content);
       }
@@ -334,18 +355,19 @@ export class ClaudeToGeminiRequestConverter extends IRequestConverter {
    * @param {Array} contents - Gemini contents 数组（会被修改）
    * @param {boolean} enableThinking - 是否启用思考模式
    * @param {string|Array} originalContent - 原始内容（用于保持顺序）
+   * @param {Map} toolUseID2Name - tool_use ID -> function name 映射表
    */
-  handleUserMessage(parsed, contents, enableThinking, originalContent = null) {
+  handleUserMessage(parsed, contents, enableThinking, originalContent = null, toolUseID2Name = new Map()) {
     // 如果有原始内容数组，按原始顺序处理（保持所有内容类型的交错顺序）
     if (originalContent && Array.isArray(originalContent)) {
-      this.buildOrderedUserMessage(originalContent, parsed.toolResults, contents);
+      this.buildOrderedUserMessage(originalContent, parsed.toolResults, contents, toolUseID2Name);
     } else if (typeof originalContent === 'string' && originalContent.trim()) {
       // 字符串内容
       contents.push({ role: 'user', parts: [{ text: originalContent }] });
     } else {
       // 兜底：先处理 tool_result，再处理其他内容（向后兼容）
       for (const toolResult of parsed.toolResults) {
-        const { parts } = this.convertToolResult(toolResult, contents);
+        const { parts } = this.convertToolResult(toolResult, contents, toolUseID2Name);
         const lastMessage = contents[contents.length - 1];
         if (lastMessage?.role === 'user' && lastMessage.parts.some(p => p.functionResponse)) {
           lastMessage.parts.push(...parts);
@@ -378,8 +400,9 @@ export class ClaudeToGeminiRequestConverter extends IRequestConverter {
    * @param {Array} originalContent - Claude 原始内容数组
    * @param {Array} parsedToolResults - 解析后的 tool_result 数组（包含提取的媒体）
    * @param {Array} contents - Gemini contents 数组（会被修改）
+   * @param {Map} toolUseID2Name - tool_use ID -> function name 映射表
    */
-  buildOrderedUserMessage(originalContent, parsedToolResults, contents) {
+  buildOrderedUserMessage(originalContent, parsedToolResults, contents, toolUseID2Name = new Map()) {
     // 构建 tool_use_id -> parsedToolResult 的映射
     const toolResultMap = new Map();
     for (const tr of parsedToolResults) {
@@ -405,7 +428,7 @@ export class ClaudeToGeminiRequestConverter extends IRequestConverter {
         // 处理 tool_result
         const parsedResult = toolResultMap.get(block.tool_use_id);
         if (parsedResult) {
-          const { parts } = this.convertToolResult(parsedResult, contents);
+          const { parts } = this.convertToolResult(parsedResult, contents, toolUseID2Name);
           const lastMessage = contents[contents.length - 1];
           if (lastMessage?.role === 'user' && lastMessage.parts.some(p => p.functionResponse)) {
             lastMessage.parts.push(...parts);
@@ -964,22 +987,30 @@ export class ClaudeToGeminiRequestConverter extends IRequestConverter {
   /**
    * 转换工具调用结果 (Claude tool_result → Gemini functionResponse parts)
    *
+   * 与 CLIProxyAPI 保持一致：优先使用 first-pass 构建的 toolUseID2Name 映射表查找函数名
+   * 参考: CLIProxyAPI antigravity_openai_request.go:307-314
+   *
    * @param {object} toolResult - 解析后的 tool_result
-   * @param {Array} contents - Gemini contents 数组（用于查找 functionName）
+   * @param {Array} contents - Gemini contents 数组（备用查找 functionName）
+   * @param {Map} toolUseID2Name - tool_use ID -> function name 映射表
    * @returns {{ parts: Array }} Gemini parts 数组
    */
-  convertToolResult(toolResult, contents) {
-    // 1. 从历史消息中查找 functionName
-    let functionName = '';
-    for (let i = contents.length - 1; i >= 0; i--) {
-      if (contents[i].role === 'model') {
-        for (const part of contents[i].parts) {
-          if (part?.functionCall?.id === toolResult.tool_use_id) {
-            functionName = part.functionCall.name;
-            break;
+  convertToolResult(toolResult, contents, toolUseID2Name = new Map()) {
+    // 优先使用 first-pass 构建的映射表（与 CLIProxyAPI 一致）
+    let functionName = toolUseID2Name.get(toolResult.tool_use_id) || '';
+
+    // 备用：从历史消息中查找 functionName
+    if (!functionName) {
+      for (let i = contents.length - 1; i >= 0; i--) {
+        if (contents[i].role === 'model') {
+          for (const part of contents[i].parts) {
+            if (part?.functionCall?.id === toolResult.tool_use_id) {
+              functionName = part.functionCall.name;
+              break;
+            }
           }
+          if (functionName) break;
         }
-        if (functionName) break;
       }
     }
 
