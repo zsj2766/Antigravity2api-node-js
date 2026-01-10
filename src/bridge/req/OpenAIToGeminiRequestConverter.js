@@ -20,8 +20,6 @@ import {
   attachDefaultSafetySettings
 } from '../common/index.js';
 import {
-  getThoughtSignature,
-  getTextThoughtSignature,
   safeJsonParse,
   safeJsonStringify
 } from '../../utils/utils.js';
@@ -196,10 +194,10 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
   /**
    * 构建助手消息的 parts (OpenAI → Gemini)
    *
-   * 关键优化（与 CLIProxyAPI 保持一致）：
-   * - 实现消息级签名传播 (currentMessageThinkingSignature)
-   * - 当一个 assistant 消息中有有效签名的文本时，其签名会传递给同一消息中的后续 tool_calls
-   * - 参考：CLIProxyAPI antigravity_claude_request.go:150-152, 211-216
+   * 与 CLIProxyAPI antigravity_openai_request.go:248-276 完全一致：
+   * - 字符串 content：正常写入
+   * - 数组 content：只处理 image_url，忽略 text/thinking 等其他类型
+   * - tool_calls：正常处理，添加 thoughtSignature
    *
    * @param {object} message - OpenAI assistant 消息
    * @param {string} modelName - 模型名称
@@ -208,55 +206,31 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
    */
   buildAssistantParts(message, modelName = '', enableThinking = false) {
     const parts = [];
-    // 消息级签名传播：记录当前消息中有效的签名
-    // 用于传递给同一消息中后续的 tool_calls（与 CLIProxyAPI 的 currentMessageThinkingSignature 一致）
-    let currentMessageThinkingSignature = null;
 
-    // 处理内容数组 (只处理 text 和 image_url，与 CLIProxyAPI 保持一致)
+    // 处理 content（与 CLIProxyAPI 完全一致）
     if (message.content) {
-      if (typeof message.content === 'string') {
-        const textPart = { text: message.content };
-        const textThoughtSignature = getTextThoughtSignature(message.content);
-        if (textThoughtSignature?.signature) {
-          textPart.thoughtSignature = textThoughtSignature.signature;
-          // 记录签名用于后续 tool_calls
-          currentMessageThinkingSignature = textThoughtSignature.signature;
-        }
-        parts.push(textPart);
+      if (typeof message.content === 'string' && message.content !== '') {
+        // 字符串 content：正常写入（CLIProxyAPI 第 251-253 行）
+        parts.push({ text: message.content });
       } else if (Array.isArray(message.content)) {
+        // 数组 content：只处理 image_url，忽略 text/thinking（CLIProxyAPI 第 254-276 行）
+        // 注意：CLIProxyAPI 对 text 类型只做 p++，不实际写入内容
         for (const item of message.content) {
           if (!item) continue;
 
-          if (item.type === 'text') {
-            if (item.text) {
-              const textPart = { text: item.text };
-              const textThoughtSignature = getTextThoughtSignature(item.text);
-              if (textThoughtSignature?.signature) {
-                textPart.thoughtSignature = textThoughtSignature.signature;
-                // 记录签名用于后续 tool_calls
-                if (!currentMessageThinkingSignature) {
-                  currentMessageThinkingSignature = textThoughtSignature.signature;
-                }
-              }
-              parts.push(textPart);
+          if (item.type === 'image_url') {
+            // 处理图片（与 CLIProxyAPI 第 260-273 行一致）
+            const imgPart = this.convertImage(item);
+            if (imgPart) {
+              parts.push(imgPart);
             }
-          } else if (item.type === 'thinking') {
-            // 与 CLIProxyAPI 保持一致：忽略 thinking 类型的内容块
-            // 原因：
-            // 1. 历史消息中的 thinking 内容通常没有有效签名（被外部服务丢失）
-            // 2. 传递无效签名的 thinking 块会导致 Antigravity API 拒绝请求
-            // 3. CLIProxyAPI 的 antigravity_openai_request.go 只处理 text 和 image_url，忽略其他类型
-            // 4. 不传递 thinking 块 = 让模型重新思考（这是可接受的）
-            //
-            // 注意：只有带有效签名的 thinking 块才应该保留，但实际上
-            // 外部服务（Claude→OpenAI 转换）通常不会保留签名信息
-            continue;
           }
+          // text, thinking 等其他类型：与 CLIProxyAPI 一致，完全忽略
         }
       }
     }
 
-    // 处理工具调用
+    // 处理工具调用（与 CLIProxyAPI 第 278-301 行一致）
     const hasToolCalls = Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
     if (hasToolCalls) {
       for (const toolCall of message.tool_calls) {
@@ -267,23 +241,10 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
             id: toolCall.id,
             name: toolCall.function?.name,
             args
-          }
+          },
+          // CLIProxyAPI 第 296 行：无条件为所有 functionCall 添加 thoughtSignature
+          thoughtSignature: THOUGHT_SIGNATURE_SKIP
         };
-
-        // 签名优先级（与 CLIProxyAPI 保持一致）：
-        // 1. 缓存中的签名（之前响应记录的）
-        // 2. 当前消息中的签名（消息级传播）
-        // 3. SKIP 绕过验证
-        const cachedSignature = getThoughtSignature(toolCall.id);
-        if (cachedSignature) {
-          part.thoughtSignature = cachedSignature;
-        } else if (currentMessageThinkingSignature) {
-          // 消息级签名传播：使用当前消息中文本块的签名
-          part.thoughtSignature = currentMessageThinkingSignature;
-        } else {
-          // CLIProxyAPI 无条件为所有 functionCall 添加 thoughtSignature
-          part.thoughtSignature = THOUGHT_SIGNATURE_SKIP;
-        }
 
         parts.push(part);
       }
