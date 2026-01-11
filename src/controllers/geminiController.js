@@ -62,7 +62,7 @@ export async function handleGeminiGenerateContent(req, res) {
 
   const { upstreamModel, imageSize: imageSizeFromModel } = parseModelAlias(model);
 
-  const { writeLog, setToken } = createLogWriter({
+  const { writeLog, setToken, logBuilder } = createLogWriter({
     req, res, startedAt, requestSnapshot, model
   });
 
@@ -101,7 +101,20 @@ export async function handleGeminiGenerateContent(req, res) {
       },
       execute: async (token) => {
         const requestBody = generateRequestBodyFromGemini(body, upstreamModel, token);
+
+        // 记录上游请求
+        logBuilder.setUpstreamRequest(
+          'https://api.antigravity.io/gemini/generate',
+          'POST',
+          { 'Content-Type': 'application/json' },
+          requestBody
+        );
+
         const geminiResponse = await generateGeminiResponseNoStream(requestBody, token);
+
+        // 记录上游响应
+        logBuilder.setUpstreamResponse(200, {}, geminiResponse);
+
         const responseWithUrls = attachImageUrlsToGeminiResponse(geminiResponse);
 
         res.json(responseWithUrls);
@@ -160,7 +173,7 @@ export async function handleGeminiStreamGenerateContent(req, res) {
 
   const { upstreamModel, imageSize: imageSizeFromModel } = parseModelAlias(model);
 
-  const { writeLog, setToken } = createLogWriter({
+  const { writeLog, setToken, logBuilder } = createLogWriter({
     req, res, startedAt, requestSnapshot, model
   });
 
@@ -202,6 +215,14 @@ export async function handleGeminiStreamGenerateContent(req, res) {
       execute: async (token) => {
         const requestBody = generateRequestBodyFromGemini(body, upstreamModel, token);
 
+        // 记录上游请求
+        logBuilder.setUpstreamRequest(
+          'https://api.antigravity.io/gemini/stream',
+          'POST',
+          { 'Content-Type': 'application/json' },
+          requestBody
+        );
+
         setStreamHeaders(res);
         res.flushHeaders();
 
@@ -216,6 +237,9 @@ export async function handleGeminiStreamGenerateContent(req, res) {
           }
           res.write(`data: ${JSON.stringify(chunk)}\n\n`);
         }
+
+        // 记录上游响应
+        logBuilder.setUpstreamResponse(200, {}, { eventCount: streamEventsForLog.length, usage });
 
         if (res.locals) {
           res.locals.streamBodySent = true;

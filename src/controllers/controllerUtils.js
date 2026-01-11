@@ -16,16 +16,8 @@ import logger from '../utils/logger.js';
 import tokenManager from '../auth/token_manager.js';
 import { saveBase64Image } from '../utils/imageStorage.js';
 import { getAvailableModels } from '../api/client.js';
-import { getUsageCountsWithinWindow, appendLog } from '../utils/log_store.js';
-import { createPipelineContext, noopPipelineContext } from '../utils/pipelineContext.js';
+import { getUsageCountsWithinWindow, RequestLogBuilder } from '../utils/request_log_store.js';
 import config from '../config/config.js';
-
-/**
- * 获取 Pipeline 日志级别
- */
-function getPipelineLogLevel() {
-  return (config.logging?.pipelineLogLevel || 'full').toLowerCase();
-}
 
 /**
  * 将 Gemini 响应中的 inlineData 落地为 URL
@@ -215,7 +207,7 @@ export function formatRetryMessage(error, delayMs) {
  *
  * 生成一个绑定了请求上下文的日志写入函数。
  * 支持动态更新 token 和 model，适用于重试场景。
- * 集成 Pipeline 追踪功能。
+ * 使用 RequestLogBuilder 记录完整的请求链数据。
  *
  * @param {Object} context - 请求上下文
  * @param {import('express').Request} context.req - Express 请求
@@ -224,7 +216,7 @@ export function formatRetryMessage(error, delayMs) {
  * @param {Object} context.requestSnapshot - 请求快照
  * @param {string} [context.correlationId] - 请求关联 ID
  * @param {string} [context.model] - 模型名称（可覆盖 req.body.model）
- * @returns {{ writeLog: Function, setToken: Function, setModel: Function, pipeline: PipelineContext }}
+ * @returns {{ writeLog: Function, setToken: Function, setModel: Function, logBuilder: RequestLogBuilder }}
  */
 export function createLogWriter(context) {
   const { req, res, startedAt, requestSnapshot, correlationId, model: initialModel } = context;
@@ -232,12 +224,15 @@ export function createLogWriter(context) {
   // 可变状态：支持在重试过程中更新
   let currentToken = null;
   let currentModel = initialModel || req.body?.model || req.params?.model || 'unknown';
+  let logSaved = false; // 防止重复保存
 
-  // 创建 Pipeline 追踪上下文
-  const pipelineLevel = getPipelineLogLevel();
-  const pipeline = pipelineLevel === 'off'
-    ? noopPipelineContext
-    : createPipelineContext(correlationId || `req-${Date.now()}`);
+  // 创建日志构建器
+  const logBuilder = new RequestLogBuilder(correlationId);
+  logBuilder.setClientRequest(req);
+  logBuilder.setMeta({
+    model: currentModel,
+    correlationId
+  });
 
   const writeLog = ({
     success,
@@ -251,38 +246,50 @@ export function createLogWriter(context) {
     responseBody = null,
     responseSummary = null
   }) => {
-    const logEntry = {
-      timestamp: new Date().toISOString(),
+    // 更新元数据
+    logBuilder.setMeta({
       model: currentModel,
       projectId: currentToken?.projectId || null,
       success,
       status,
-      message,
-      durationMs: Date.now() - startedAt,
-      path: req.originalUrl,
-      method: req.method,
-      detail: {
-        request: requestSnapshot,
-        response: {
-          status,
-          headers: res.getHeaders ? res.getHeaders() : undefined,
-          body: responseBody,
-          rawBody: rawResponse,
-          modelOutput: responseSummary
-        }
-      },
-      // 添加 Pipeline 追踪数据
-      pipeline: pipeline.toLogEntry ? pipeline.toLogEntry() : null
-    };
+      message
+    });
 
-    // 仅在有值时添加可选字段
-    if (correlationId) logEntry.correlationId = correlationId;
-    if (isRetry) logEntry.isRetry = isRetry;
-    if (retryCount > 0) logEntry.retryCount = retryCount;
-    if (willRetry) logEntry.willRetry = willRetry;
-    if (errorPreview) logEntry.errorPreview = errorPreview;
+    // 设置客户端响应
+    if (responseBody !== null || responseSummary !== null) {
+      logBuilder.setClientResponse(
+        status,
+        res.getHeaders ? res.getHeaders() : {},
+        responseBody,
+        responseSummary
+      );
+    }
 
-    appendLog(logEntry);
+    // 如果是错误，记录上游错误
+    if (!success && (errorPreview || rawResponse)) {
+      logBuilder.setUpstreamError({
+        message,
+        rawResponse: rawResponse || errorPreview
+      });
+    }
+
+    // 添加重试信息到 pipeline
+    if (isRetry || willRetry) {
+      logBuilder.addPipelineStage('retry', {
+        isRetry,
+        retryCount,
+        willRetry,
+        errorPreview
+      }, null);
+    }
+
+    // 只在最终完成时保存日志（willRetry=false 表示不会继续重试）
+    // 当 willRetry=true 时，只记录 pipeline 阶段，不保存文件
+    let result = null;
+    if (!willRetry && !logSaved) {
+      result = logBuilder.finish({ success, status, message });
+      logSaved = true;
+    }
 
     // 同时输出到控制台详细日志
     if (logger.detail) {
@@ -302,20 +309,20 @@ export function createLogWriter(context) {
       });
     }
 
-    // 输出 Pipeline 摘要（如果有）
-    if (pipeline.getSummary && pipelineLevel === 'full') {
-      const summary = pipeline.getSummary();
-      if (summary) {
-        logger.debug(summary);
-      }
-    }
+    return result;
   };
 
   return {
     writeLog,
-    setToken: (token) => { currentToken = token; },
-    setModel: (model) => { currentModel = model; },
-    pipeline
+    setToken: (token) => {
+      currentToken = token;
+      logBuilder.setMeta({ projectId: token?.projectId });
+    },
+    setModel: (model) => {
+      currentModel = model;
+      logBuilder.setMeta({ model });
+    },
+    logBuilder
   };
 }
 

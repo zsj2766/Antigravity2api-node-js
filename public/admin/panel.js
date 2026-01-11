@@ -870,7 +870,8 @@ async function fetchLogDetail(logId) {
   if (!logId) throw new Error('缺少日志 ID');
   if (logDetailCache.has(logId)) return logDetailCache.get(logId);
   const data = await fetchJson(`/admin/logs/${logId}`);
-  const detail = data.log;
+  // 新格式直接返回完整日志对象，兼容旧格式的 data.log
+  const detail = data.meta ? data : data.log;
   logDetailCache.set(logId, detail);
   return detail;
 }
@@ -882,56 +883,124 @@ function renderLogDetailContent(detail, container) {
     return;
   }
 
-  const requestSnapshot = detail.detail?.request;
-  const responseSnapshot = detail.detail?.response;
-  const rawBody = responseSnapshot?.rawBody;
-  const modelAnswer =
-    responseSnapshot?.modelOutput ||
-    responseSnapshot?.body?.modelOutput ||
-    responseSnapshot?.body?.text ||
-    responseSnapshot?.body ||
-    responseSnapshot;
+  // 兼容新旧格式
+  const meta = detail.meta || detail;
+  const clientRequest = detail.clientRequest || detail.detail?.request;
+  const clientResponse = detail.clientResponse || detail.detail?.response;
+  const pipeline = detail.pipeline || {};
+  const upstream = detail.upstream || {};
 
-  const isError = !detail.success;
-  const errorSummary = isError ? { status: detail.status, message: detail.message } : null;
+  const isError = meta.success === false;
+  const errorSummary = isError ? { status: meta.status, message: meta.message } : null;
 
+  // 构建标签页
   const tabsHtml = `
     <div class="detail-tabs">
       <button class="detail-tab-btn active" data-tab="summary">摘要</button>
-      <button class="detail-tab-btn" data-tab="output">模型输出</button>
-      <button class="detail-tab-btn" data-tab="request">完整请求</button>
-      <button class="detail-tab-btn" data-tab="response">完整响应</button>
+      <button class="detail-tab-btn" data-tab="client-request">客户端请求</button>
+      <button class="detail-tab-btn" data-tab="pipeline">转换链</button>
+      <button class="detail-tab-btn" data-tab="upstream">上游请求/响应</button>
+      <button class="detail-tab-btn" data-tab="client-response">客户端响应</button>
     </div>
   `;
 
+  // 摘要内容
   const summaryContent = isError
     ? `
       <div class="log-detail-block">
         <h4 style="color:var(--status-off-text)">❌ 失败原因</h4>
         <pre>${formatJson(errorSummary)}</pre>
       </div>
-      ${rawBody ? `
+      ${upstream.error ? `
       <div class="log-detail-block">
-        <h4>原始响应 (Raw Body)</h4>
-        <pre style="max-height:300px">${escapeHtml(typeof rawBody === 'string' ? rawBody : JSON.stringify(rawBody, null, 2))}</pre>
+        <h4>上游错误</h4>
+        <pre style="max-height:300px">${formatJson(upstream.error)}</pre>
       </div>` : ''}
     `
     : `
       <div class="log-detail-block">
         <h4 style="color:var(--status-ok-text)">✅ 调用成功</h4>
         <div class="setting-item">
-          <div class="setting-meta">状态码: ${detail.status}</div>
-          <div class="setting-meta">耗时: ${detail.durationMs}ms</div>
-          <div class="setting-meta">模型: ${escapeHtml(detail.model)}</div>
+          <div class="setting-meta">状态码: ${meta.status}</div>
+          <div class="setting-meta">耗时: ${meta.durationMs}ms</div>
+          <div class="setting-meta">模型: ${escapeHtml(meta.model || 'unknown')}</div>
+          <div class="setting-meta">凭证: ${escapeHtml(meta.projectId || '-')}</div>
         </div>
       </div>
     `;
 
+  // 转换链内容
+  let pipelineContent = '<div class="log-detail-block"><h4>转换链阶段</h4>';
+  if (pipeline.stages && pipeline.stages.length > 0) {
+    pipelineContent += '<div class="pipeline-stages">';
+    pipeline.stages.forEach((stage, idx) => {
+      const isLast = idx === pipeline.stages.length - 1;
+      const hasError = pipeline.errors?.some(e => e.stage === stage.name);
+      const status = hasError ? '❌' : '✅';
+      pipelineContent += `
+        <div class="pipeline-stage ${hasError ? 'error' : ''}">
+          <div class="stage-header">
+            <span class="stage-num">${idx + 1}</span>
+            <span class="stage-name">${escapeHtml(stage.name)}</span>
+            <span class="stage-duration">${stage.durationMs}ms</span>
+            <span class="stage-status">${status}</span>
+          </div>
+          <div class="stage-details">
+            <div class="stage-io">
+              <div class="stage-input">
+                <strong>输入:</strong>
+                <pre>${formatJson(stage.input || '无')}</pre>
+              </div>
+              <div class="stage-output">
+                <strong>输出:</strong>
+                <pre>${formatJson(stage.output || '无')}</pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    });
+    pipelineContent += '</div>';
+  } else {
+    pipelineContent += '<p class="muted">无转换阶段数据</p>';
+  }
+  if (pipeline.errors && pipeline.errors.length > 0) {
+    pipelineContent += '<h4 style="color:var(--status-off-text);margin-top:1rem">转换错误</h4>';
+    pipelineContent += `<pre>${formatJson(pipeline.errors)}</pre>`;
+  }
+  pipelineContent += '</div>';
+
+  // 上游请求/响应内容
+  let upstreamContent = '<div class="log-detail-block">';
+  if (upstream.request) {
+    upstreamContent += `
+      <h4>上游请求</h4>
+      <pre>${formatJson(upstream.request)}</pre>
+    `;
+  }
+  if (upstream.response) {
+    upstreamContent += `
+      <h4>上游响应</h4>
+      <pre>${formatJson(upstream.response)}</pre>
+    `;
+  }
+  if (upstream.error) {
+    upstreamContent += `
+      <h4 style="color:var(--status-off-text)">上游错误</h4>
+      <pre>${formatJson(upstream.error)}</pre>
+    `;
+  }
+  if (!upstream.request && !upstream.response && !upstream.error) {
+    upstreamContent += '<p class="muted">无上游请求/响应数据</p>';
+  }
+  upstreamContent += '</div>';
+
   const panesHtml = `
     <div class="detail-tab-pane active" data-tab="summary">${summaryContent}</div>
-    <div class="detail-tab-pane" data-tab="output"><pre>${formatJson(modelAnswer || '暂无模型回答')}</pre></div>
-    <div class="detail-tab-pane" data-tab="request"><pre>${formatJson(requestSnapshot || '暂无请求数据')}</pre></div>
-    <div class="detail-tab-pane" data-tab="response"><pre>${formatJson(responseSnapshot || '暂无响应数据')}</pre></div>
+    <div class="detail-tab-pane" data-tab="client-request"><pre>${formatJson(clientRequest || '暂无请求数据')}</pre></div>
+    <div class="detail-tab-pane" data-tab="pipeline">${pipelineContent}</div>
+    <div class="detail-tab-pane" data-tab="upstream">${upstreamContent}</div>
+    <div class="detail-tab-pane" data-tab="client-response"><pre>${formatJson(clientResponse || '暂无响应数据')}</pre></div>
   `;
 
   container.innerHTML = tabsHtml + panesHtml;

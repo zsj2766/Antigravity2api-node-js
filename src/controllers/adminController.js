@@ -40,11 +40,11 @@ import {
   getRecentLogs,
   getUsageCountsWithinWindow,
   clearLogs,
-  getDbStats,
+  getStats as getDbStats,
   cleanupOldLogs,
   getLogCount,
   onLogAppended
-} from '../utils/log_store.js';
+} from '../utils/request_log_store.js';
 import tokenManager from '../auth/token_manager.js';
 import quotaManager from '../auth/quota_manager.js';
 import { parseToml } from '../utils/tomlParser.js';
@@ -689,6 +689,7 @@ export function clearAllLogs(req, res) {
  * 获取单条日志详情
  *
  * 根据日志 ID 返回完整的请求/响应详情。
+ * 新格式包含：meta, clientRequest, pipeline, upstream, clientResponse
  *
  * @param {import('express').Request} req
  * @param {import('express').Response} res
@@ -698,7 +699,7 @@ export function getLogById(req, res) {
   if (!detail) {
     return res.status(404).json({ error: '日志不存在或已过期' });
   }
-  res.json({ log: detail });
+  res.json(detail);
 }
 
 // ========== 额度查询处理器 ==========

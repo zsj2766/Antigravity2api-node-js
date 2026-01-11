@@ -211,7 +211,7 @@ export async function handleClaudeMessages(req, res) {
   const requestSnapshot = createRequestSnapshot(req);
   const claudeBody = req.body || {};
 
-  const { writeLog, setToken } = createLogWriter({
+  const { writeLog, setToken, logBuilder } = createLogWriter({
     req, res, startedAt, requestSnapshot, model: claudeBody.model
   });
 
@@ -248,7 +248,18 @@ export async function handleClaudeMessages(req, res) {
         retryCountForLog++;
       },
       execute: async (token) => {
+        // 记录转换阶段：Claude -> Gemini
         const requestBody = await generateRequestBodyFromAnthropic(claudeBody, token);
+        logBuilder.addPipelineStage('claude-to-gemini', claudeBody, requestBody.request);
+
+        // 记录上游请求
+        logBuilder.setUpstreamRequest(
+          'https://api.antigravity.io/gemini/stream',
+          'POST',
+          { 'Content-Type': 'application/json' },
+          requestBody
+        );
+
         const requestId = requestBody.requestId;
         const inputTokens = tokenStats?.input_tokens || 0;
 
@@ -256,11 +267,17 @@ export async function handleClaudeMessages(req, res) {
           const { usage } = await handleClaudeStream(
             requestBody, token, res, requestId, claudeBody.model, inputTokens
           );
+          // 记录上游响应和转换阶段
+          logBuilder.setUpstreamResponse(200, {}, { usage });
+          logBuilder.addPipelineStage('gemini-to-claude-stream', { usage }, { usage });
           return { stream: true, usage };
         } else {
-          const { payload } = await handleClaudeNonStream(
+          const { payload, result } = await handleClaudeNonStream(
             requestBody, token, res, requestId, claudeBody.model, inputTokens
           );
+          // 记录上游响应和转换阶段
+          logBuilder.setUpstreamResponse(200, {}, result);
+          logBuilder.addPipelineStage('gemini-to-claude', result, payload);
           return { stream: false, payload };
         }
       }

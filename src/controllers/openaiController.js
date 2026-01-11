@@ -193,7 +193,7 @@ export const createChatCompletionHandler = (resolveToken, options = {}) => async
   if (!res.locals) res.locals = {};
   res.locals.streamMode = stream === true;
 
-  const { writeLog, setToken } = createLogWriter({
+  const { writeLog, setToken, logBuilder } = createLogWriter({
     req, res, startedAt, requestSnapshot, correlationId, model
   });
 
@@ -234,7 +234,19 @@ export const createChatCompletionHandler = (resolveToken, options = {}) => async
         streamEventsForLog = [];
 
         const { upstreamModel } = parseModelAlias(model);
+
+        // 记录转换阶段：OpenAI -> Gemini
+        const openaiInput = { messages, model: upstreamModel, tools, tool_choice, ...params };
         const requestBody = await generateRequestBody(messages, upstreamModel, params, tools, token, tool_choice);
+        logBuilder.addPipelineStage('openai-to-gemini', openaiInput, requestBody.request);
+
+        // 记录上游请求
+        logBuilder.setUpstreamRequest(
+          'https://api.antigravity.io/gemini/stream',
+          'POST',
+          { 'Content-Type': 'application/json' },
+          requestBody
+        );
 
         const { id, created } = createResponseMeta();
 
@@ -248,9 +260,17 @@ export const createChatCompletionHandler = (resolveToken, options = {}) => async
             streamEventsForLog,
             includeUsage
           );
+          // 记录上游响应（流式）
+          logBuilder.setUpstreamResponse(200, {}, { eventCount: streamEvents.length, usage });
+          // 记录转换阶段：Gemini -> OpenAI (流式)
+          logBuilder.addPipelineStage('gemini-to-openai-stream', { eventCount: streamEvents.length }, { usage });
           return { stream: true, usage, events: streamEvents, summary: summarizeStreamEvents(streamEvents) };
         } else {
           const { payload, result: chatResult } = await handleChatNonStream(requestBody, token, res, id, created, model);
+          // 记录上游响应（非流式）
+          logBuilder.setUpstreamResponse(200, {}, chatResult);
+          // 记录转换阶段：Gemini -> OpenAI (非流式)
+          logBuilder.addPipelineStage('gemini-to-openai', chatResult, payload);
           return {
             stream: false,
             choices: payload.choices,

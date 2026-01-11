@@ -1454,6 +1454,110 @@ button:disabled {
   color: var(--muted);
 }
 
+/* Pipeline stages 样式 */
+.pipeline-stages {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pipeline-stage {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--subtle-bg);
+  overflow: hidden;
+}
+
+.pipeline-stage.error {
+  border-color: var(--log-fail-border);
+  background: var(--log-fail-bg);
+}
+
+.stage-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--card-bg);
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.pipeline-stage.error .stage-header {
+  background: var(--log-fail-bg);
+}
+
+.stage-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--button-bg);
+  color: var(--button-text);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.stage-name {
+  flex: 1;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.stage-duration {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 2px 6px;
+  background: var(--subtle-bg);
+  border-radius: 4px;
+}
+
+.stage-status {
+  font-size: 14px;
+}
+
+.stage-details {
+  padding: 10px 12px;
+}
+
+.stage-io {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+@media (max-width: 768px) {
+  .stage-io {
+    grid-template-columns: 1fr;
+  }
+}
+
+.stage-input, .stage-output {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stage-input strong, .stage-output strong {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.stage-input pre, .stage-output pre {
+  margin: 0;
+  padding: 8px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 11px;
+  max-height: 200px;
+  overflow: auto;
+}
+
 .log-error-detail {
   margin-top: 6px;
   padding: 8px;
