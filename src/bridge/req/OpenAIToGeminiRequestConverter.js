@@ -208,71 +208,9 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
   buildAssistantParts(message, modelName = '', enableThinking = false) {
     const parts = [];
 
-    // 处理 reasoning_content（OpenAI o1/o3 格式的思考内容）
-    // 必须放在最前面，对应 Claude 的 thinking block 要求
-    // 注意：这是对 CLIProxyAPI 的扩展，用于支持多轮 thinking 对话
-    if (message.reasoning_content) {
-      // 签名优先级：1. 透传签名 2. 缓存签名
-      let signature = null;
-      if (message.reasoning_signature && message.reasoning_signature.length >= 50) {
-        signature = message.reasoning_signature;
-      } else {
-        // 尝试从缓存获取签名（按文本内容查找）
-        const cached = getTextThoughtSignature(message.reasoning_content);
-        if (cached?.signature && cached.signature.length >= 50) {
-          signature = cached.signature;
-        }
-      }
-
-      // 与 CLIProxyAPI antigravity_claude_request.go:153-162 一致：
-      // 只有当有有效签名时才添加 thinking 块，否则跳过
-      // THOUGHT_SIGNATURE_SKIP 只对 functionCall 有效，对 thinking 块无效
-      if (signature) {
-        parts.push({
-          text: message.reasoning_content,
-          thought: true,
-          thoughtSignature: signature
-        });
-      }
-      // 无有效签名时跳过 thinking 块（不转换为 text，不使用 SKIP）
-    }
-
-    // 处理 content 数组中的 thinking 块（Claude 格式）
-    if (enableThinking && Array.isArray(message.content)) {
-      for (const item of message.content) {
-        if (item?.type === 'thinking' && item.thinking) {
-          // 签名优先级：1. item.signature 2. 缓存签名
-          let signature = null;
-          if (item.signature && item.signature.length >= 50) {
-            signature = item.signature;
-          } else {
-            const cached = getTextThoughtSignature(item.thinking);
-            if (cached?.signature && cached.signature.length >= 50) {
-              signature = cached.signature;
-            }
-          }
-
-          // 只有有效签名时才添加
-          if (signature) {
-            parts.push({
-              text: item.thinking,
-              thought: true,
-              thoughtSignature: signature
-            });
-            break;
-          }
-          // 无效签名时跳过（与 CLIProxyAPI 一致）
-        } else if (item?.type === 'redacted_thinking' && item.data && item.data.length >= 50) {
-          // redacted_thinking 的 data 字段本身就是签名
-          parts.push({
-            text: '[redacted]',
-            thought: true,
-            thoughtSignature: item.data
-          });
-          break;
-        }
-      }
-    }
+    // 与 CLIProxyAPI 保持一致：忽略 reasoning_content
+    // 与 CLIProxyAPI 保持一致：忽略 content 数组中的 thinking 块
+    // CLIProxyAPI antigravity_openai_request.go:248-276 完全不处理 thinking/redacted_thinking
 
     // 处理 content（与 CLIProxyAPI 完全一致）
     if (message.content) {

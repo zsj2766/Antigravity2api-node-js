@@ -63,10 +63,6 @@ export class GeminiToOpenAIResponseConverter extends IResponseConverter {
     // 添加 reasoning_content（OpenAI o1/o3 格式）
     if (reasoningContent) {
       message.reasoning_content = reasoningContent;
-      // 透传签名 (Scheme B)
-      if (reasoningSignature) {
-        message.reasoning_signature = reasoningSignature;
-      }
     }
 
     if (toolCalls.length > 0) {
@@ -153,11 +149,8 @@ export class GeminiToOpenAIResponseConverter extends IResponseConverter {
               if (part.thoughtSignature) {
                 registerTextThoughtSignature(part.text, part.thoughtSignature);
               }
-              // 透传签名 (Scheme B)
-              emitter.sendThinking(part.text, part.thoughtSignature);
-            } else if (part.thoughtSignature) {
-              // 单独的 signature chunk（没有 text）
-              emitter.sendThinking('', part.thoughtSignature);
+              // 仅透传 reasoning_content，避免返回 signature
+              emitter.sendThinking(part.text);
             }
             continue;
           }

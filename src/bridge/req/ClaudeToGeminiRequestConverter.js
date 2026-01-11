@@ -212,10 +212,12 @@ export class ClaudeToGeminiRequestConverter extends IRequestConverter {
           // 解包 thinking 字段（可能是字符串、{text}、{thinking} 对象）
           if (block.signature && block.signature.length >= 50) {
             const thinkingText = unpackThinkingText(block.thinking);
-            result.thinkingParts.push({
-              thinking: thinkingText,
-              signature: block.signature
-            });
+            if (thinkingText) {
+              result.thinkingParts.push({
+                thinking: thinkingText,
+                signature: block.signature
+              });
+            }
           }
           break;
 
@@ -600,6 +602,9 @@ export class ClaudeToGeminiRequestConverter extends IRequestConverter {
       if (thinkingParts.length > 0 && parts[0]?.thought !== true) {
         parts = [...thinkingParts, ...otherParts];
       }
+      // NOTE: 不注入占位 thinking 块！
+      // 参考 CLIProxyAPI antigravity_claude_request.go:182-183
+      // "Antigravity API validates signatures, so dummy values are rejected."
     }
 
     if (parts.length === 0) {
@@ -645,12 +650,16 @@ export class ClaudeToGeminiRequestConverter extends IRequestConverter {
           const hasValidSignature = block.signature && block.signature.length >= 50;
           if (!hasValidSignature) break;
 
+          // 解包 thinking 字段（可能是字符串、{text}、{thinking} 对象）
+          const thinkingText = unpackThinkingText(block.thinking);
+          // 与 CLIProxyAPI antigravity_claude_request.go:167-169 一致：
+          // 跳过空 thinking 文本的块，避免发送 { thought: true, text: "" }
+          if (!thinkingText) break;
+
           // 记录有效签名，用于传递给后续的 tool_use（消息级签名传播）
           currentMessageThinkingSignature = block.signature;
 
           if (allowThoughtSignature) {
-            // 解包 thinking 字段（可能是字符串、{text}、{thinking} 对象）
-            const thinkingText = unpackThinkingText(block.thinking);
             parts.push({
               thought: true,
               text: thinkingText,
@@ -767,6 +776,10 @@ export class ClaudeToGeminiRequestConverter extends IRequestConverter {
         return [...thinkingParts, ...otherParts];
       }
     }
+
+    // NOTE: 不注入占位 thinking 块！
+    // 参考 CLIProxyAPI antigravity_claude_request.go:182-183
+    // "Antigravity API validates signatures, so dummy values are rejected."
 
     return parts;
   }
