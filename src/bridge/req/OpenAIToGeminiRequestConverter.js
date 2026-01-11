@@ -208,9 +208,20 @@ export class OpenAIToGeminiRequestConverter extends IRequestConverter {
   buildAssistantParts(message, modelName = '', enableThinking = false) {
     const parts = [];
 
-    // 与 CLIProxyAPI 保持一致：忽略 reasoning_content
-    // 与 CLIProxyAPI 保持一致：忽略 content 数组中的 thinking 块
-    // CLIProxyAPI antigravity_openai_request.go:248-276 完全不处理 thinking/redacted_thinking
+    // 处理 reasoning_content（OpenAI o1/o3 格式的思考内容）
+    // 当 thinking 模式启用时，assistant 消息必须以 thinking 块开头
+    // 我们尝试从缓存获取签名，如果缓存未命中则跳过（不使用 SKIP，因为 thinking 块不支持 SKIP）
+    if (enableThinking && message.reasoning_content) {
+      const cached = getTextThoughtSignature(message.reasoning_content);
+      if (cached?.signature && cached.signature.length >= 50) {
+        parts.push({
+          text: message.reasoning_content,
+          thought: true,
+          thoughtSignature: cached.signature
+        });
+      }
+      // 缓存未命中时跳过 thinking 块（与 CLIProxyAPI 一致：无有效签名则丢弃）
+    }
 
     // 处理 content（与 CLIProxyAPI 完全一致）
     if (message.content) {
