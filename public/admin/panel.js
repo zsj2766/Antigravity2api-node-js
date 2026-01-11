@@ -38,7 +38,7 @@ const themeToggleBtn = document.getElementById('themeToggleBtn');
 const HOUR_WINDOW_MINUTES = 60;
 const HOURLY_LIMIT = 20;
 
-const PAGE_SIZE = 5;
+const PAGE_SIZE = 20;
 let accountsData = [];
 let tokenRuntimeStats = {};
 let tokenCooldownMs = 5 * 60 * 1000; // 默认5分钟，从后端动态更新
@@ -259,8 +259,12 @@ function updateFilteredAccounts() {
     const matchesStatus =
       statusFilter === 'all' || (statusFilter === 'enabled' && acc.enable) || (statusFilter === 'disabled' && !acc.enable);
 
+    // 检查是否有错误：usage.failed > 0 或者有 error 字段或者运行时统计有失败
     const failedCount = acc?.usage?.failed || 0;
-    const matchesError = !errorOnly || failedCount > 0;
+    const stats = tokenRuntimeStats[acc.projectId] || {};
+    const runtimeFailed = stats.failureCount || 0;
+    const hasError = failedCount > 0 || runtimeFailed > 0 || !!acc.error;
+    const matchesError = !errorOnly || hasError;
 
     return matchesStatus && matchesError;
   });
@@ -790,7 +794,8 @@ function initLogSettingsUI() {
   label.style.gap = '8px';
 
   const span = document.createElement('span');
-  span.textContent = '调用日志级别';
+  span.textContent = '记录级别';
+  span.title = '控制服务端记录哪些日志，不影响已有日志的显示';
 
   const select = document.createElement('select');
   select.className = 'input select';
@@ -800,9 +805,9 @@ function initLogSettingsUI() {
   select.style.padding = '4px 24px 4px 8px';
 
   const options = [
-    { value: 'all', text: '全部 (All)' },
-    { value: 'error', text: '仅错误 (Error Only)' },
-    { value: 'off', text: '关闭 (Off)' }
+    { value: 'all', text: '全部记录 (All)' },
+    { value: 'error', text: '仅记录错误 (Error Only)' },
+    { value: 'off', text: '关闭记录 (Off)' }
   ];
 
   options.forEach(opt => {
@@ -818,6 +823,10 @@ function initLogSettingsUI() {
 
   logsRefreshBtn.remove();
   actions.appendChild(logsRefreshBtn);
+  if (logsClearBtn) {
+    logsClearBtn.remove();
+    actions.appendChild(logsClearBtn);
+  }
   logsHeader.appendChild(actions);
 
   logLevelSelect = select;
@@ -2055,6 +2064,9 @@ async function loadDbStats() {
         <div class="db-stat-value" style="font-size:18px">${s.pipelineLogLevel || 'ALL'}</div>
       </div>
     `;
+
+    // 同时加载日志文件列表
+    loadLogFiles();
   } catch (e) {
     grid.innerHTML = `<div class="quota-error">加载失败: ${e.message}</div>`;
   }
@@ -2078,6 +2090,92 @@ async function handleDbCleanup() {
     btn.disabled = false;
     btn.textContent = originalText;
   }
+}
+
+// ========== 日志文件列表功能 ==========
+
+async function loadLogFiles() {
+  const container = document.getElementById('logFilesContainer');
+  if (!container) return;
+
+  container.innerHTML = '<div class="quota-loading">加载文件列表...</div>';
+
+  try {
+    const { files = [] } = await fetchJson('/admin/logs/files');
+
+    if (files.length === 0) {
+      container.innerHTML = '<div class="quota-placeholder">暂无日志文件</div>';
+      return;
+    }
+
+    container.innerHTML = `
+      <table class="log-files-table">
+        <thead>
+          <tr>
+            <th>文件名</th>
+            <th>大小</th>
+            <th>修改时间</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${files.map(f => `
+            <tr>
+              <td class="file-name">${escapeHtml(f.name)}</td>
+              <td class="file-size">${escapeHtml(f.sizeFormatted)}</td>
+              <td class="file-time">${escapeHtml(f.modifiedAtFormatted)}</td>
+              <td class="file-actions">
+                <button class="mini-btn" onclick="previewLogFile('${escapeHtml(f.name)}')">👁 预览</button>
+                <button class="mini-btn" onclick="downloadLogFile('${escapeHtml(f.name)}')">📥 下载</button>
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+  } catch (e) {
+    container.innerHTML = `<div class="quota-error">加载失败: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function previewLogFile(filename) {
+  const previewModal = document.getElementById('filePreviewModal');
+  const previewTitle = document.getElementById('filePreviewTitle');
+  const previewContent = document.getElementById('filePreviewContent');
+
+  if (!previewModal || !previewContent) {
+    alert('预览功能不可用');
+    return;
+  }
+
+  previewTitle.textContent = filename;
+  previewContent.textContent = '加载中...';
+  previewModal.style.display = 'flex';
+
+  try {
+    const data = await fetchJson(`/admin/logs/files/${encodeURIComponent(filename)}`);
+
+    if (data.type === 'database') {
+      previewContent.textContent = data.content;
+    } else {
+      let content = data.content || '';
+      if (data.truncated) {
+        content += '\n\n... [文件过大，已截断显示，请下载查看完整内容]';
+      }
+      previewContent.textContent = content;
+    }
+  } catch (e) {
+    previewContent.textContent = '加载失败: ' + e.message;
+  }
+}
+
+function downloadLogFile(filename) {
+  window.open(`/admin/logs/files/${encodeURIComponent(filename)}/download`, '_blank');
+}
+
+function closeFilePreviewModal() {
+  const modal = document.getElementById('filePreviewModal');
+  if (modal) modal.style.display = 'none';
 }
 
 // ========== 冻结历史功能 ==========

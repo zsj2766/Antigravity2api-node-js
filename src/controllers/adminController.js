@@ -42,7 +42,8 @@ import {
   clearLogs,
   getDbStats,
   cleanupOldLogs,
-  getLogCount
+  getLogCount,
+  onLogAppended
 } from '../utils/log_store.js';
 import tokenManager from '../auth/token_manager.js';
 import quotaManager from '../auth/quota_manager.js';
@@ -1042,6 +1043,169 @@ export function exportLogsApi(req, res) {
   }
 }
 
+// ========== 日志文件管理 ==========
+
+/**
+ * 获取日志文件目录路径
+ */
+function getLogFilesDir() {
+  return path.join(__dirname, '..', '..', 'data');
+}
+
+/**
+ * 获取日志文件列表
+ *
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ */
+export function getLogFiles(req, res) {
+  try {
+    const logDir = getLogFilesDir();
+    if (!fs.existsSync(logDir)) {
+      return res.json({ files: [] });
+    }
+
+    const files = fs.readdirSync(logDir)
+      .filter(name => {
+        // 只列出日志相关文件
+        const ext = path.extname(name).toLowerCase();
+        return ['.db', '.json', '.log', '.txt'].includes(ext);
+      })
+      .map(name => {
+        const filePath = path.join(logDir, name);
+        try {
+          const stat = fs.statSync(filePath);
+          return {
+            name,
+            size: stat.size,
+            sizeFormatted: formatFileSize(stat.size),
+            modifiedAt: stat.mtime.toISOString(),
+            modifiedAtFormatted: stat.mtime.toLocaleString('zh-CN')
+          };
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean)
+      .sort((a, b) => new Date(b.modifiedAt) - new Date(a.modifiedAt));
+
+    return res.json({ files, directory: logDir });
+  } catch (e) {
+    logger.error('获取日志文件列表失败:', e.message);
+    return res.status(500).json({ error: e.message || '获取文件列表失败' });
+  }
+}
+
+/**
+ * 格式化文件大小
+ */
+function formatFileSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(2) + ' KB';
+  if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+  return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+}
+
+/**
+ * 获取指定日志文件内容
+ *
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ */
+export function getLogFileContent(req, res) {
+  try {
+    const filename = req.params.filename;
+    if (!filename || filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+      return res.status(400).json({ error: '无效的文件名' });
+    }
+
+    const filePath = path.join(getLogFilesDir(), filename);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: '文件不存在' });
+    }
+
+    const stat = fs.statSync(filePath);
+    const ext = path.extname(filename).toLowerCase();
+
+    // 对于大文件只返回部分内容
+    const maxSize = 1024 * 1024; // 1MB
+    let content = '';
+    let truncated = false;
+
+    if (ext === '.db') {
+      // SQLite 数据库文件不支持直接预览
+      return res.json({
+        filename,
+        size: stat.size,
+        sizeFormatted: formatFileSize(stat.size),
+        type: 'database',
+        content: '[SQLite 数据库文件，不支持预览，请下载后使用数据库工具查看]',
+        truncated: false
+      });
+    }
+
+    if (stat.size > maxSize) {
+      // 只读取前 1MB
+      const fd = fs.openSync(filePath, 'r');
+      const buffer = Buffer.alloc(maxSize);
+      fs.readSync(fd, buffer, 0, maxSize, 0);
+      fs.closeSync(fd);
+      content = buffer.toString('utf-8');
+      truncated = true;
+    } else {
+      content = fs.readFileSync(filePath, 'utf-8');
+    }
+
+    return res.json({
+      filename,
+      size: stat.size,
+      sizeFormatted: formatFileSize(stat.size),
+      modifiedAt: stat.mtime.toISOString(),
+      type: ext === '.json' ? 'json' : 'text',
+      content,
+      truncated
+    });
+  } catch (e) {
+    logger.error('读取日志文件失败:', e.message);
+    return res.status(500).json({ error: e.message || '读取文件失败' });
+  }
+}
+
+/**
+ * 下载指定日志文件
+ *
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ */
+export function downloadLogFile(req, res) {
+  try {
+    const filename = req.params.filename;
+    if (!filename || filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+      return res.status(400).json({ error: '无效的文件名' });
+    }
+
+    const filePath = path.join(getLogFilesDir(), filename);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: '文件不存在' });
+    }
+
+    const stat = fs.statSync(filePath);
+    const ext = path.extname(filename).toLowerCase();
+
+    // 设置响应头
+    res.setHeader('Content-Type', ext === '.json' ? 'application/json' : 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
+    res.setHeader('Content-Length', stat.size);
+
+    // 流式传输文件
+    const stream = fs.createReadStream(filePath);
+    stream.pipe(res);
+  } catch (e) {
+    logger.error('下载日志文件失败:', e.message);
+    return res.status(500).json({ error: e.message || '下载失败' });
+  }
+}
+
 // ========== SSE 实时日志推送 ==========
 
 // 存储活跃的 SSE 连接
@@ -1112,6 +1276,9 @@ export function broadcastLog(logEntry) {
   });
 }
 
+// 注册日志监听器，自动广播到 SSE 客户端
+onLogAppended(broadcastLog);
+
 export default {
   // 登录/登出
   renderLoginPage,
@@ -1142,6 +1309,10 @@ export default {
   cleanupLogsApi,
   exportLogsApi,
   liveLogsApi,
+  // 日志文件管理
+  getLogFiles,
+  getLogFileContent,
+  downloadLogFile,
   broadcastLog,
   // 额度查询
   getQuotaList,

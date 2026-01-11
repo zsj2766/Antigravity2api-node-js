@@ -11,6 +11,9 @@ import * as sqliteStore from './log_store_sqlite.js';
 // 是否启用 SQLite 存储（默认启用）
 const USE_SQLITE = true;
 
+// 日志广播回调列表
+const logListeners = [];
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -178,7 +181,12 @@ export function readLogs() {
 export function appendLog(entry) {
   // 委托到 SQLite 存储
   if (USE_SQLITE) {
-    return sqliteStore.appendLog(entry);
+    const result = sqliteStore.appendLog(entry);
+    // 广播日志到所有监听器（用于 SSE 实时推送）
+    if (result && logListeners.length > 0) {
+      notifyLogListeners(result);
+    }
+    return result;
   }
 
   // 原有文件存储逻辑（保留作为降级备选）
@@ -216,6 +224,9 @@ export function appendLog(entry) {
   }
 
   fs.writeFileSync(LOG_FILE, JSON.stringify(sliced, null, 2));
+  if (mergedEntry && logListeners.length > 0) {
+    notifyLogListeners(mergedEntry);
+  }
   return mergedEntry;
 }
 
@@ -487,5 +498,38 @@ export function closeDb() {
   if (USE_SQLITE) {
     return sqliteStore.closeDb();
   }
+}
+
+// ========== 日志广播功能 ==========
+
+/**
+ * 通知所有监听器有新日志
+ */
+function notifyLogListeners(logEntry) {
+  for (const listener of logListeners) {
+    try {
+      listener(logEntry);
+    } catch {
+      // 忽略单个监听器的错误
+    }
+  }
+}
+
+/**
+ * 注册日志监听器（用于 SSE 实时推送）
+ * @param {Function} callback - 回调函数，接收日志条目
+ * @returns {Function} 取消注册的函数
+ */
+export function onLogAppended(callback) {
+  if (typeof callback === 'function') {
+    logListeners.push(callback);
+    return () => {
+      const index = logListeners.indexOf(callback);
+      if (index > -1) {
+        logListeners.splice(index, 1);
+      }
+    };
+  }
+  return () => {};
 }
 

@@ -185,6 +185,12 @@ export const log = {
   info: (...args) => logMessage('info', ...args),
   warn: (...args) => logMessage('warn', ...args),
   error: (...args) => logMessage('error', ...args),
+  debug: (...args) => {
+    if (currentDebugLevel >= DebugLevel.LOW) {
+      const timestamp = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+      console.log(`${colors.gray}${timestamp}${colors.reset} ${colors.cyan}[debug]${colors.reset}`, ...args);
+    }
+  },
   request: logRequest,
   detail: logDetail,
   backend: logBackend,

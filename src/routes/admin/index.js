@@ -46,7 +46,10 @@ import {
   getDbStatsApi,
   cleanupLogsApi,
   exportLogsApi,
-  liveLogsApi
+  liveLogsApi,
+  getLogFiles,
+  getLogFileContent,
+  downloadLogFile
 } from '../../controllers/adminController.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -72,6 +75,9 @@ router.get('/logs/stats', requirePanelAuthApi, getDbStatsApi);
 router.post('/logs/cleanup', requirePanelAuthApi, cleanupLogsApi);
 router.get('/logs/export', requirePanelAuthApi, exportLogsApi);
 router.get('/logs/live', requirePanelAuthApi, liveLogsApi);
+router.get('/logs/files', requirePanelAuthApi, getLogFiles);
+router.get('/logs/files/:filename', requirePanelAuthApi, getLogFileContent);
+router.get('/logs/files/:filename/download', requirePanelAuthApi, downloadLogFile);
 router.get('/logs', requirePanelAuthApi, getLogs);
 router.post('/logs/clear', requirePanelAuthApi, clearAllLogs);
 router.get('/logs/:id', requirePanelAuthApi, getLogById);

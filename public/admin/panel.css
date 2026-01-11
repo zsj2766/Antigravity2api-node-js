@@ -2436,3 +2436,67 @@ button:disabled {
   color: var(--muted);
   margin-top: 12px;
 }
+
+/* 日志文件列表样式 */
+.log-files-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin-top: 12px;
+}
+
+.log-files-table th,
+.log-files-table td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.log-files-table th {
+  background: var(--card-bg);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.log-files-table tbody tr:hover {
+  background: var(--subtle-bg);
+}
+
+.log-files-table .file-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: var(--accent-text);
+}
+
+.log-files-table .file-size,
+.log-files-table .file-time {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.log-files-table .file-actions {
+  display: flex;
+  gap: 6px;
+}
+
+/* 文件预览模态框样式 */
+.file-preview-modal-content {
+  max-width: 900px;
+  width: 90%;
+  max-height: 80vh;
+}
+
+.file-preview-content {
+  margin: 0;
+  padding: 16px;
+  background: var(--subtle-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 60vh;
+  overflow: auto;
+  color: var(--text);
+}
