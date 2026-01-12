@@ -86,6 +86,8 @@ async function handleChatStream(requestBody, token, res, id, model, streamEvents
 
   // 收尾完成后再抛出异常，让上层处理
   if (streamError) {
+    // 错误时也返回已收集的部分数据，供上层记录
+    streamError.partialData = { streamEvents: streamEventsForLog, clientEvents };
     throw streamError;
   }
 
@@ -286,6 +288,15 @@ export const createChatCompletionHandler = (resolveToken, options = {}) => async
           }
         } catch (error) {
           // 确保异常时也能记录日志
+          // 记录已收集的部分响应数据（如果有）
+          if (error.partialData) {
+            if (error.partialData.streamEvents?.length > 0) {
+              pipelineSession.logAntigravityResponse(error.partialData.streamEvents);
+            }
+            if (error.partialData.clientEvents?.length > 0) {
+              pipelineSession.logClientResponse(error.partialData.clientEvents);
+            }
+          }
           pipelineSession.logError('controller', error, { stream });
           pipelineSession.finish({ success: false, status: extractErrorStatus(error), message: error?.message });
           throw error;
