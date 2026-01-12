@@ -236,8 +236,9 @@ export const createChatCompletionHandler = (resolveToken, options = {}) => async
 
         const { upstreamModel } = parseModelAlias(model);
 
-        // 创建 Pipeline 日志会话
-        const pipelineSession = createPipelineLogSession(correlationId, 'openai', {
+        // 创建 Pipeline 日志会话 (使用独立的 logRequestId 避免重试时 ID 冲突)
+        const logRequestId = crypto.randomUUID();
+        const pipelineSession = createPipelineLogSession(logRequestId, 'openai', {
           model: upstreamModel,
           projectId: token?.projectId,
           correlationId
@@ -259,11 +260,16 @@ export const createChatCompletionHandler = (resolveToken, options = {}) => async
               includeUsage,
               pipelineSession
             );
+            // 记录响应数据
+            pipelineSession.logAntigravityResponse(streamEvents);
             // 完成 Pipeline 日志会话
             pipelineSession.finish({ success: true, status: 200 });
             return { stream: true, usage, events: streamEvents, summary: summarizeStreamEvents(streamEvents) };
           } else {
             const { payload, result: chatResult } = await handleChatNonStream(requestBody, token, res, id, created, model, pipelineSession);
+            // 记录响应数据
+            pipelineSession.logAntigravityResponse(chatResult);
+            pipelineSession.logClientResponse(payload);
             // 完成 Pipeline 日志会话
             pipelineSession.finish({ success: true, status: 200 });
             return {

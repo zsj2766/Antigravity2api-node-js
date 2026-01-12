@@ -86,9 +86,11 @@ async function handleClaudeStream(requestBody, token, res, requestId, model, inp
   let lastChunk = null;
   let usage = null;
   let streamError = null;
+  const chunks = [];
 
   try {
     for await (const { chunk, usage: u } of generateAssistantResponseStream(requestBody, token)) {
+      chunks.push(chunk);
       lastChunk = chunk;
       if (u) usage = u;
       await processor.process(chunk);
@@ -114,7 +116,7 @@ async function handleClaudeStream(requestBody, token, res, requestId, model, inp
     throw streamError;
   }
 
-  return { usage };
+  return { usage, chunks };
 }
 
 /**
@@ -230,6 +232,7 @@ export async function handleClaudeMessages(req, res) {
   if (!res.locals) res.locals = {};
   res.locals.streamMode = isStream;
   let retryCountForLog = 0;
+  const correlationId = requestSnapshot?.correlationId || crypto.randomUUID();
 
   try {
     const { result, retryCount } = await withRetry({
@@ -250,9 +253,9 @@ export async function handleClaudeMessages(req, res) {
         retryCountForLog++;
       },
       execute: async (token) => {
-        // 创建 Pipeline 日志会话
-        const correlationId = requestSnapshot?.correlationId || crypto.randomUUID();
-        const pipelineSession = createPipelineLogSession(correlationId, 'claude', {
+        // 创建 Pipeline 日志会话 (使用独立的 logRequestId 避免重试时 ID 冲突)
+        const logRequestId = crypto.randomUUID();
+        const pipelineSession = createPipelineLogSession(logRequestId, 'claude', {
           model: claudeBody.model,
           projectId: token?.projectId,
           correlationId
@@ -264,16 +267,21 @@ export async function handleClaudeMessages(req, res) {
           const inputTokens = tokenStats?.input_tokens || 0;
 
           if (isStream) {
-            const { usage } = await handleClaudeStream(
+            const { usage, chunks } = await handleClaudeStream(
               requestBody, token, res, requestId, claudeBody.model, inputTokens, pipelineSession
             );
+            // 记录响应数据
+            pipelineSession.logAntigravityResponse(chunks);
             // 完成 Pipeline 日志会话
             pipelineSession.finish({ success: true, status: 200 });
             return { stream: true, usage };
           } else {
-            const { payload } = await handleClaudeNonStream(
+            const { payload, result } = await handleClaudeNonStream(
               requestBody, token, res, requestId, claudeBody.model, inputTokens, pipelineSession
             );
+            // 记录响应数据
+            pipelineSession.logAntigravityResponse(result);
+            pipelineSession.logClientResponse(payload);
             // 完成 Pipeline 日志会话
             pipelineSession.finish({ success: true, status: 200 });
             return { stream: false, payload };

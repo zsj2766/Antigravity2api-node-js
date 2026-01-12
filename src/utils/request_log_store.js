@@ -181,7 +181,7 @@ function writeIndex(index) {
 /**
  * 清理过期日志
  */
-function cleanupOldLogs() {
+export function cleanupOldLogs() {
   const cutoff = Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000;
   const index = readIndex();
 
