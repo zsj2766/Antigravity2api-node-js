@@ -14,6 +14,29 @@ export class BaseSseEmitter {
     this.hasStarted = false;
     this.finished = false;
     this.totalOutputTokens = 0;
+
+    // 事件收集（用于日志记录）
+    this.collectedEvents = [];
+    this.collectEvents = options.collectEvents !== false; // 默认开启
+  }
+
+  /**
+   * 收集发送的事件
+   * @param {string} eventType - 事件类型
+   * @param {object} data - 事件数据
+   */
+  collectEvent(eventType, data) {
+    if (this.collectEvents) {
+      this.collectedEvents.push({ event: eventType, data, timestamp: Date.now() });
+    }
+  }
+
+  /**
+   * 获取收集的所有事件
+   * @returns {Array} 事件列表
+   */
+  getCollectedEvents() {
+    return this.collectedEvents;
   }
 
   trackTokens(text) {

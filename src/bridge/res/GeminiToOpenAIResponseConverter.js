@@ -222,6 +222,14 @@ export class GeminiToOpenAIResponseConverter extends IResponseConverter {
 
         const usage = finalChunk?.usageMetadata;
         emitter.finish(usage, finishReason);
+      },
+
+      /**
+       * 获取收集的客户端响应事件
+       * @returns {Array} 事件列表
+       */
+      getCollectedEvents() {
+        return emitter.getCollectedEvents?.() || [];
       }
     };
   }

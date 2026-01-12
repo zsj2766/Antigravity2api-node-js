@@ -16,6 +16,8 @@ export class OpenAIProtocolEmitter extends BaseSseEmitter {
     if (this.res?.locals) {
       this.res.locals.streamBodySent = true;
     }
+    // 收集事件用于日志记录
+    this.collectEvent('data', data);
     this.res.write(`data: ${JSON.stringify(data)}\n\n`);
   }
 

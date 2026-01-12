@@ -20,6 +20,8 @@ export class ClaudeProtocolEmitter extends BaseSseEmitter {
     if (this.res?.locals) {
       this.res.locals.streamBodySent = true;
     }
+    // 收集事件用于日志记录
+    this.collectEvent(event, data);
     this.res.write(`event: ${event}\n`);
     this.res.write(`data: ${JSON.stringify(data)}\n\n`);
   }

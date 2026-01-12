@@ -81,12 +81,15 @@ async function handleChatStream(requestBody, token, res, id, model, streamEvents
     }
   }
 
+  // 收集客户端响应事件
+  const clientEvents = processor.getCollectedEvents?.() || [];
+
   // 收尾完成后再抛出异常，让上层处理
   if (streamError) {
     throw streamError;
   }
 
-  return { usage, streamEvents: streamEventsForLog };
+  return { usage, streamEvents: streamEventsForLog, clientEvents };
 }
 
 /**
@@ -250,7 +253,7 @@ export const createChatCompletionHandler = (resolveToken, options = {}) => async
           const { id, created } = createResponseMeta();
 
           if (stream) {
-            const { usage, streamEvents } = await handleChatStream(
+            const { usage, streamEvents, clientEvents } = await handleChatStream(
               requestBody,
               token,
               res,
@@ -262,6 +265,8 @@ export const createChatCompletionHandler = (resolveToken, options = {}) => async
             );
             // 记录响应数据
             pipelineSession.logAntigravityResponse(streamEvents);
+            // 记录客户端响应事件
+            pipelineSession.logClientResponse(clientEvents);
             // 完成 Pipeline 日志会话
             pipelineSession.finish({ success: true, status: 200 });
             return { stream: true, usage, events: streamEvents, summary: summarizeStreamEvents(streamEvents) };

@@ -111,12 +111,15 @@ async function handleClaudeStream(requestBody, token, res, requestId, model, inp
     }
   }
 
+  // 收集客户端响应事件
+  const clientEvents = processor.getCollectedEvents?.() || [];
+
   // 收尾完成后再抛出异常，让上层处理
   if (streamError) {
     throw streamError;
   }
 
-  return { usage, chunks };
+  return { usage, chunks, clientEvents };
 }
 
 /**
@@ -267,11 +270,13 @@ export async function handleClaudeMessages(req, res) {
           const inputTokens = tokenStats?.input_tokens || 0;
 
           if (isStream) {
-            const { usage, chunks } = await handleClaudeStream(
+            const { usage, chunks, clientEvents } = await handleClaudeStream(
               requestBody, token, res, requestId, claudeBody.model, inputTokens, pipelineSession
             );
             // 记录响应数据
             pipelineSession.logAntigravityResponse(chunks);
+            // 记录客户端响应事件
+            pipelineSession.logClientResponse(clientEvents);
             // 完成 Pipeline 日志会话
             pipelineSession.finish({ success: true, status: 200 });
             return { stream: true, usage };
