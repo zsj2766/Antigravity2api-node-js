@@ -45,6 +45,7 @@ import {
   getLogCount,
   onLogAppended
 } from '../utils/request_log_store.js';
+import { onLogAppended as onSqliteLogAppended } from '../utils/log_store_sqlite.js';
 import tokenManager from '../auth/token_manager.js';
 import quotaManager from '../auth/quota_manager.js';
 import { parseToml } from '../utils/tomlParser.js';
@@ -1279,6 +1280,8 @@ export function broadcastLog(logEntry) {
 
 // 注册日志监听器，自动广播到 SSE 客户端
 onLogAppended(broadcastLog);
+// 同时注册 SQLite 日志监听器（pipelineLogService 使用 SQLite 存储）
+onSqliteLogAppended(broadcastLog);
 
 export default {
   // 登录/登出

@@ -36,6 +36,9 @@ const MAX_DETAIL_SIZE = 50 * 1024; // 50KB，超过则截断
 const BATCH_SIZE = 10; // 批量写入阈值
 const BATCH_INTERVAL_MS = 500; // 批量写入间隔
 
+// 日志监听器列表（用于实时广播）
+const logListeners = [];
+
 // 日志级别
 function getPipelineLogLevel() {
   const raw = (process.env.PIPELINE_LOG_LEVEL || config.logging.pipelineLogLevel || 'full').toLowerCase();
@@ -263,6 +266,22 @@ export function appendLog(entry) {
   };
 
   scheduleBatchWrite(dbEntry);
+
+  // 通知监听器（用于实时广播）
+  notifyLogListeners({
+    id,
+    timestamp,
+    model: entry.model,
+    projectId: entry.projectId,
+    success: entry.success,
+    status: entry.status,
+    durationMs: entry.durationMs,
+    path: entry.path,
+    method: entry.method,
+    message: entry.message,
+    correlationId: entry.correlationId,
+    hasDetail: !!entry.detail
+  });
 
   return { ...entry, id, timestamp };
 }
@@ -679,6 +698,36 @@ process.on('SIGTERM', () => {
   process.exit(0);
 });
 
+/**
+ * 通知日志监听器
+ */
+function notifyLogListeners(logEntry) {
+  for (const listener of logListeners) {
+    try {
+      listener(logEntry);
+    } catch { /* ignore */ }
+  }
+}
+
+/**
+ * 注册日志监听器（用于实时广播）
+ *
+ * @param {Function} callback - 回调函数
+ * @returns {Function} 取消注册函数
+ */
+export function onLogAppended(callback) {
+  if (typeof callback === 'function') {
+    logListeners.push(callback);
+    return () => {
+      const index = logListeners.indexOf(callback);
+      if (index > -1) {
+        logListeners.splice(index, 1);
+      }
+    };
+  }
+  return () => {};
+}
+
 export default {
   appendLog,
   getRecentLogs,
@@ -691,5 +740,6 @@ export default {
   clearLogs,
   getDbStats,
   getLogCount,
-  closeDb
+  closeDb,
+  onLogAppended
 };
