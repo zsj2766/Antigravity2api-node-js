@@ -2,7 +2,7 @@
 node_modules/
 
 # 账户信息
-# accounts.json
+accounts.json
 
 # 日志
 *.log
@@ -22,3 +22,8 @@ test/
 Docs/
 .claude/
 .ace-tool/
+
+output/
+prompt/
+project.md
+test/

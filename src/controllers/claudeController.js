@@ -8,6 +8,7 @@
  * @module controllers/claudeController
  */
 
+import crypto from 'crypto';
 import logger from '../utils/logger.js';
 import tokenManager from '../auth/token_manager.js';
 import {
@@ -33,6 +34,7 @@ import {
 } from './controllerUtils.js';
 import { withRetry } from '../utils/withRetry.js';
 import { saveBase64Image } from '../utils/imageStorage.js';
+import { createPipelineLogSession } from '../utils/pipelineLogService.js';
 
 /**
  * Token 计数处理器
@@ -63,7 +65,7 @@ export function handleCountTokens(req, res) {
  *
  * 使用 try/finally 确保异常时也能正确收尾，避免客户端看不到 message_delta + message_stop 事件
  */
-async function handleClaudeStream(requestBody, token, res, requestId, model, inputTokens) {
+async function handleClaudeStream(requestBody, token, res, requestId, model, inputTokens, pipelineSession = null) {
   // 初始化流状态标志：用于 withRetry 判断是否可重试
   res.locals = res.locals || {};
   res.locals.streamBodySent = false;
@@ -118,7 +120,7 @@ async function handleClaudeStream(requestBody, token, res, requestId, model, inp
 /**
  * 处理 Claude 非流式响应
  */
-async function handleClaudeNonStream(requestBody, token, res, requestId, model, inputTokens) {
+async function handleClaudeNonStream(requestBody, token, res, requestId, model, inputTokens, pipelineSession = null) {
   const result = await generateAssistantResponseNoStream(requestBody, token);
 
   // 优先使用 Converter 生成的 contentBlocks（保持原始顺序）
@@ -211,7 +213,7 @@ export async function handleClaudeMessages(req, res) {
   const requestSnapshot = createRequestSnapshot(req);
   const claudeBody = req.body || {};
 
-  const { writeLog, setToken, logBuilder } = createLogWriter({
+  const { writeLog, setToken } = createLogWriter({
     req, res, startedAt, requestSnapshot, model: claudeBody.model
   });
 
@@ -248,37 +250,39 @@ export async function handleClaudeMessages(req, res) {
         retryCountForLog++;
       },
       execute: async (token) => {
-        // 记录转换阶段：Claude -> Gemini
-        const requestBody = await generateRequestBodyFromAnthropic(claudeBody, token);
-        logBuilder.addPipelineStage('claude-to-gemini', claudeBody, requestBody.request);
+        // 创建 Pipeline 日志会话
+        const correlationId = requestSnapshot?.correlationId || crypto.randomUUID();
+        const pipelineSession = createPipelineLogSession(correlationId, 'claude', {
+          model: claudeBody.model,
+          projectId: token?.projectId,
+          correlationId
+        });
 
-        // 记录上游请求
-        logBuilder.setUpstreamRequest(
-          'https://api.antigravity.io/gemini/stream',
-          'POST',
-          { 'Content-Type': 'application/json' },
-          requestBody
-        );
+        try {
+          const requestBody = await generateRequestBodyFromAnthropic(claudeBody, token, { pipelineSession });
+          const requestId = requestBody.requestId;
+          const inputTokens = tokenStats?.input_tokens || 0;
 
-        const requestId = requestBody.requestId;
-        const inputTokens = tokenStats?.input_tokens || 0;
-
-        if (isStream) {
-          const { usage } = await handleClaudeStream(
-            requestBody, token, res, requestId, claudeBody.model, inputTokens
-          );
-          // 记录上游响应和转换阶段
-          logBuilder.setUpstreamResponse(200, {}, { usage });
-          logBuilder.addPipelineStage('gemini-to-claude-stream', { usage }, { usage });
-          return { stream: true, usage };
-        } else {
-          const { payload, result } = await handleClaudeNonStream(
-            requestBody, token, res, requestId, claudeBody.model, inputTokens
-          );
-          // 记录上游响应和转换阶段
-          logBuilder.setUpstreamResponse(200, {}, result);
-          logBuilder.addPipelineStage('gemini-to-claude', result, payload);
-          return { stream: false, payload };
+          if (isStream) {
+            const { usage } = await handleClaudeStream(
+              requestBody, token, res, requestId, claudeBody.model, inputTokens, pipelineSession
+            );
+            // 完成 Pipeline 日志会话
+            pipelineSession.finish({ success: true, status: 200 });
+            return { stream: true, usage };
+          } else {
+            const { payload } = await handleClaudeNonStream(
+              requestBody, token, res, requestId, claudeBody.model, inputTokens, pipelineSession
+            );
+            // 完成 Pipeline 日志会话
+            pipelineSession.finish({ success: true, status: 200 });
+            return { stream: false, payload };
+          }
+        } catch (error) {
+          // 确保异常时也能记录日志
+          pipelineSession.logError('controller', error, { stream: isStream });
+          pipelineSession.finish({ success: false, status: extractErrorStatus(error), message: error?.message });
+          throw error;
         }
       }
     });

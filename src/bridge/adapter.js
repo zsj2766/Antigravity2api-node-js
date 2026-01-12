@@ -14,12 +14,43 @@ import log from '../utils/logger.js';
 // 调试模式开关（通过环境变量控制）
 const DEBUG_BRIDGE = process.env.DEBUG_BRIDGE === 'true';
 
+// Pipeline 日志级别
+const PIPELINE_LOG_LEVEL = process.env.PIPELINE_LOG_LEVEL || 'full';
+
 /**
  * 调试日志辅助函数
  */
 function debugLog(stage, data) {
   if (!DEBUG_BRIDGE) return;
   log.debug(`[Bridge:${stage}]`, typeof data === 'object' ? JSON.stringify(data, null, 2) : data);
+}
+
+/**
+ * Pipeline 日志辅助函数
+ * 记录完整的请求/响应数据到 PipelineLogSession
+ */
+function pipelineLog(session, stage, data, metadata = {}) {
+  if (!session || PIPELINE_LOG_LEVEL === 'off') return;
+
+  switch (stage) {
+    case 'client-request':
+      session.logClientRequest(data);
+      break;
+    case 'gemini-request':
+      session.logGeminiRequest(data, metadata.wrappedRequest);
+      break;
+    case 'antigravity-response':
+      session.logAntigravityResponse(data, metadata);
+      break;
+    case 'client-response':
+      session.logClientResponse(data, metadata);
+      break;
+    case 'error':
+      session.logError(metadata.stage || 'unknown', data, metadata.context);
+      break;
+    default:
+      log.warn(`[Bridge] Unknown pipeline stage: ${stage}`);
+  }
 }
 
 /**
@@ -33,9 +64,11 @@ function debugLog(stage, data) {
  * @param {Array} tools - OpenAI 工具定义
  * @param {object} token - 认证 token
  * @param {string|object} toolChoice - 工具选择配置
+ * @param {object} options - 额外选项（含 pipelineSession）
  * @returns {object} 包装后的请求体
  */
-export async function generateRequestBody(messages, modelName, parameters, tools, token, toolChoice) {
+export async function generateRequestBody(messages, modelName, parameters, tools, token, toolChoice, options = {}) {
+  const { pipelineSession } = options;
   const converter = Bridge.getRequestConverter('openai', 'gemini');
 
   // 构建 OpenAI 格式请求体
@@ -46,6 +79,9 @@ export async function generateRequestBody(messages, modelName, parameters, tools
     tool_choice: toolChoice,
     ...parameters
   };
+
+  // 记录客户端原始请求
+  pipelineLog(pipelineSession, 'client-request', openaiBody);
 
   // 调试日志：记录输入请求
   debugLog('OpenAI-Input', {
@@ -110,7 +146,7 @@ export async function generateRequestBody(messages, modelName, parameters, tools
   }
 
   // 包装成旧格式（与 CLIProxyAPI geminiToAntigravity 一致）
-  return {
+  const wrappedRequest = {
     project: token?.projectId,
     requestId: generateRequestId(),
     request: geminiRequest,
@@ -118,6 +154,19 @@ export async function generateRequestBody(messages, modelName, parameters, tools
     userAgent: 'antigravity',
     requestType: 'agent'  // CLIProxyAPI antigravity_executor.go:1281
   };
+
+  // 使用非枚举属性避免 JSON.stringify 循环引用
+  if (pipelineSession) {
+    Object.defineProperty(wrappedRequest, '_pipelineSession', {
+      value: pipelineSession,
+      enumerable: false
+    });
+  }
+
+  // 记录转换后的 Gemini 请求
+  pipelineLog(pipelineSession, 'gemini-request', geminiRequest, { wrappedRequest });
+
+  return wrappedRequest;
 }
 
 /**
@@ -127,9 +176,12 @@ export async function generateRequestBody(messages, modelName, parameters, tools
  *
  * @param {object} claudeBody - Claude Messages API 请求体
  * @param {object} token - 认证 token
+ * @param {object} options - 额外选项（含 pipelineSession）
  * @returns {object} 包装后的请求体
  */
-export async function generateRequestBodyFromAnthropic(claudeBody, token) {
+export async function generateRequestBodyFromAnthropic(claudeBody, token, options = {}) {
+  const { pipelineSession } = options;
+
   // 验证必填参数（保持与旧转换器一致）
   if (!claudeBody || typeof claudeBody !== 'object') {
     throw new Error('请求体格式不合法');
@@ -140,6 +192,9 @@ export async function generateRequestBodyFromAnthropic(claudeBody, token) {
   if (!Array.isArray(claudeBody.messages) || claudeBody.messages.length === 0) {
     throw new Error('messages 不能为空');
   }
+
+  // 记录客户端原始请求
+  pipelineLog(pipelineSession, 'client-request', claudeBody);
 
   const converter = Bridge.getRequestConverter('claude', 'gemini');
   const modelName = claudeBody.model;
@@ -207,7 +262,7 @@ export async function generateRequestBodyFromAnthropic(claudeBody, token) {
   }
 
   // 包装成旧格式（与 CLIProxyAPI geminiToAntigravity 一致）
-  return {
+  const wrappedRequest = {
     project: token?.projectId,
     requestId: generateRequestId(),
     request: geminiRequest,
@@ -215,6 +270,19 @@ export async function generateRequestBodyFromAnthropic(claudeBody, token) {
     userAgent: 'antigravity',
     requestType: 'agent'  // CLIProxyAPI antigravity_executor.go:1281
   };
+
+  // 使用非枚举属性避免 JSON.stringify 循环引用
+  if (pipelineSession) {
+    Object.defineProperty(wrappedRequest, '_pipelineSession', {
+      value: pipelineSession,
+      enumerable: false
+    });
+  }
+
+  // 记录转换后的 Gemini 请求
+  pipelineLog(pipelineSession, 'gemini-request', geminiRequest, { wrappedRequest });
+
+  return wrappedRequest;
 }
 
 /**

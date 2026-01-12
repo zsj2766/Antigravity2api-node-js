@@ -591,6 +591,11 @@ export async function generateImageModelResponse(requestBody, token, callback) {
  * @returns {AsyncGenerator<{chunk: Object, usage: Object|null, finishReason: string|null}>}
  */
 export async function* generateAssistantResponseStream(requestBody, token) {
+    // 提取 pipelineSession（如果存在）
+    const pipelineSession = requestBody?._pipelineSession;
+    const streamChunks = []; // 收集流式响应用于日志
+    const streamStartTime = Date.now(); // 记录开始时间用于 durationMs 计算
+
     let buffer = '';
     let usage = null;
     let finishReason = null;
@@ -624,6 +629,17 @@ export async function* generateAssistantResponseStream(requestBody, token) {
     const endStream = (error = null) => {
         streamEnded = true;
         streamError = error;
+        // 记录流式响应日志
+        if (pipelineSession) {
+            if (error) {
+                pipelineSession.logError('antigravity-response', error, { streamChunks });
+            } else {
+                pipelineSession.logAntigravityResponse(
+                    { streamChunks, chunkCount: streamChunks.length },
+                    { status: 200, durationMs: Date.now() - streamStartTime }
+                );
+            }
+        }
         if (resolveNext) {
             if (error) {
                 resolveNext({ value: undefined, done: true, error });
@@ -636,6 +652,10 @@ export async function* generateAssistantResponseStream(requestBody, token) {
 
     const processChunk = (text) => {
         buffer += text;
+        // 收集原始响应用于日志（限制大小）
+        if (streamChunks.length < 100) {
+            streamChunks.push(text.slice(0, 1000));
+        }
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
 
@@ -936,6 +956,8 @@ async function callNoStreamApi(requestBody, token) {
 }
 
 export async function generateAssistantResponseNoStream(requestBody, token) {
+    // 提取 pipelineSession（如果存在）
+    const pipelineSession = requestBody?._pipelineSession;
 
     let data;
     let aggregatedText = '';
@@ -943,7 +965,15 @@ export async function generateAssistantResponseNoStream(requestBody, token) {
 
     try {
         data = await callNoStreamApi(requestBody, token);
+        // 记录 Antigravity 响应
+        if (pipelineSession) {
+            pipelineSession.logAntigravityResponse(data, { status: 200 });
+        }
     } catch (error) {
+        // 记录错误响应
+        if (pipelineSession) {
+            pipelineSession.logError('antigravity-response', error, { requestBody });
+        }
         await handleApiError(error, token);
     }
 

@@ -34,13 +34,14 @@ import {
 } from './controllerUtils.js';
 import { withRetry } from '../utils/withRetry.js';
 import { saveBase64Image } from '../utils/imageStorage.js';
+import { createPipelineLogSession } from '../utils/pipelineLogService.js';
 
 /**
  * 处理聊天流式响应
  *
  * 使用 try/finally 确保异常时也能正确收尾，避免客户端看不到完整的 SSE 事件
  */
-async function handleChatStream(requestBody, token, res, id, model, streamEventsForLog, includeUsage) {
+async function handleChatStream(requestBody, token, res, id, model, streamEventsForLog, includeUsage, pipelineSession = null) {
   // 初始化流状态标志：用于 withRetry 判断是否可重试
   res.locals = res.locals || {};
   res.locals.streamBodySent = false;
@@ -91,17 +92,17 @@ async function handleChatStream(requestBody, token, res, id, model, streamEvents
 /**
  * 处理聊天非流式响应
  */
-async function handleChatNonStream(requestBody, token, res, id, created, model) {
+async function handleChatNonStream(requestBody, token, res, id, created, model, pipelineSession = null) {
   const result = await generateAssistantResponseNoStream(requestBody, token);
 
   let finalContent = result.content || '';
   if (result.images && result.images.length > 0) {
-    const imageMarkdown = result.images.map(img => `![image](${img.url})`).join('\n\n');
-    finalContent = finalContent ? `${finalContent}\n\n${imageMarkdown}` : imageMarkdown;
+    const imageMarkdown = result.images.map(img => `![image](${img.url})`).join('\\n\\n');
+    finalContent = finalContent ? `${finalContent}\\n\\n${imageMarkdown}` : imageMarkdown;
   }
   if (result.files && result.files.length > 0) {
-    const fileMarkdown = result.files.map(file => `[File: ${file.mimeType}](${file.url})`).join('\n\n');
-    finalContent = finalContent ? `${finalContent}\n\n${fileMarkdown}` : fileMarkdown;
+    const fileMarkdown = result.files.map(file => `[File: ${file.mimeType}](${file.url})`).join('\\n\\n');
+    finalContent = finalContent ? `${finalContent}\\n\\n${fileMarkdown}` : fileMarkdown;
   }
 
   const message = { role: 'assistant', content: finalContent };
@@ -193,7 +194,7 @@ export const createChatCompletionHandler = (resolveToken, options = {}) => async
   if (!res.locals) res.locals = {};
   res.locals.streamMode = stream === true;
 
-  const { writeLog, setToken, logBuilder } = createLogWriter({
+  const { writeLog, setToken } = createLogWriter({
     req, res, startedAt, requestSnapshot, correlationId, model
   });
 
@@ -235,48 +236,48 @@ export const createChatCompletionHandler = (resolveToken, options = {}) => async
 
         const { upstreamModel } = parseModelAlias(model);
 
-        // 记录转换阶段：OpenAI -> Gemini
-        const openaiInput = { messages, model: upstreamModel, tools, tool_choice, ...params };
-        const requestBody = await generateRequestBody(messages, upstreamModel, params, tools, token, tool_choice);
-        logBuilder.addPipelineStage('openai-to-gemini', openaiInput, requestBody.request);
+        // 创建 Pipeline 日志会话
+        const pipelineSession = createPipelineLogSession(correlationId, 'openai', {
+          model: upstreamModel,
+          projectId: token?.projectId,
+          correlationId
+        });
 
-        // 记录上游请求
-        logBuilder.setUpstreamRequest(
-          'https://api.antigravity.io/gemini/stream',
-          'POST',
-          { 'Content-Type': 'application/json' },
-          requestBody
-        );
+        try {
+          const requestBody = await generateRequestBody(messages, upstreamModel, params, tools, token, tool_choice, { pipelineSession });
 
-        const { id, created } = createResponseMeta();
+          const { id, created } = createResponseMeta();
 
-        if (stream) {
-          const { usage, streamEvents } = await handleChatStream(
-            requestBody,
-            token,
-            res,
-            id,
-            model,
-            streamEventsForLog,
-            includeUsage
-          );
-          // 记录上游响应（流式）
-          logBuilder.setUpstreamResponse(200, {}, { eventCount: streamEvents.length, usage });
-          // 记录转换阶段：Gemini -> OpenAI (流式)
-          logBuilder.addPipelineStage('gemini-to-openai-stream', { eventCount: streamEvents.length }, { usage });
-          return { stream: true, usage, events: streamEvents, summary: summarizeStreamEvents(streamEvents) };
-        } else {
-          const { payload, result: chatResult } = await handleChatNonStream(requestBody, token, res, id, created, model);
-          // 记录上游响应（非流式）
-          logBuilder.setUpstreamResponse(200, {}, chatResult);
-          // 记录转换阶段：Gemini -> OpenAI (非流式)
-          logBuilder.addPipelineStage('gemini-to-openai', chatResult, payload);
-          return {
-            stream: false,
-            choices: payload.choices,
-            usage: chatResult.usage,
-            summary: { text: payload.choices[0].message.content, tool_calls: chatResult.toolCalls, usage: chatResult.usage }
-          };
+          if (stream) {
+            const { usage, streamEvents } = await handleChatStream(
+              requestBody,
+              token,
+              res,
+              id,
+              model,
+              streamEventsForLog,
+              includeUsage,
+              pipelineSession
+            );
+            // 完成 Pipeline 日志会话
+            pipelineSession.finish({ success: true, status: 200 });
+            return { stream: true, usage, events: streamEvents, summary: summarizeStreamEvents(streamEvents) };
+          } else {
+            const { payload, result: chatResult } = await handleChatNonStream(requestBody, token, res, id, created, model, pipelineSession);
+            // 完成 Pipeline 日志会话
+            pipelineSession.finish({ success: true, status: 200 });
+            return {
+              stream: false,
+              choices: payload.choices,
+              usage: chatResult.usage,
+              summary: { text: payload.choices[0].message.content, tool_calls: chatResult.toolCalls, usage: chatResult.usage }
+            };
+          }
+        } catch (error) {
+          // 确保异常时也能记录日志
+          pipelineSession.logError('controller', error, { stream });
+          pipelineSession.finish({ success: false, status: extractErrorStatus(error), message: error?.message });
+          throw error;
         }
       }
     });
