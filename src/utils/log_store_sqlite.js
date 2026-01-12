@@ -32,7 +32,7 @@ if (!fs.existsSync(DB_DIR)) {
 
 // 配置常量
 const RETENTION_DAYS = Math.max(1, config.logging.requestLogRetentionDays || 7);
-const MAX_DETAIL_SIZE = 50 * 1024; // 50KB，超过则截断
+const MAX_DETAIL_SIZE = 500 * 1024; // 500KB，增加以容纳 base64 图片数据
 const BATCH_SIZE = 10; // 批量写入阈值
 const BATCH_INTERVAL_MS = 500; // 批量写入间隔
 

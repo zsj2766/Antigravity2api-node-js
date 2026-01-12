@@ -7,9 +7,8 @@
  * @module utils/pipelineContext
  */
 
-// 最大数据截断长度
-const MAX_DATA_LENGTH = 10000;
-const MAX_BASE64_LENGTH = 200;
+// 最大数据截断长度（增加到 500KB 以容纳 base64 图片）
+const MAX_DATA_LENGTH = 500000;
 
 /**
  * 请求链路追踪上下文
@@ -107,21 +106,17 @@ export class PipelineContext {
   }
 
   /**
-   * 字符串脱敏
+   * 字符串处理（保留原始数据，仅截断超长字符串）
    */
   sanitizeString(str) {
     if (str.length <= MAX_DATA_LENGTH) {
-      // 检查是否为 base64
-      if (this.isBase64(str) && str.length > MAX_BASE64_LENGTH) {
-        return `[BASE64:${str.length} chars]`;
-      }
       return str;
     }
     return str.slice(0, MAX_DATA_LENGTH) + `...[TRUNCATED:${str.length} chars]`;
   }
 
   /**
-   * 对象脱敏
+   * 对象处理（隐藏敏感字段，保留 base64 数据）
    */
   sanitizeObject(obj) {
     const result = {};
@@ -134,13 +129,7 @@ export class PipelineContext {
         continue;
       }
 
-      // 处理 base64 数据字段
-      if (key === 'data' && typeof value === 'string' && this.isBase64(value)) {
-        result[key] = `[BASE64:${value.length} chars]`;
-        continue;
-      }
-
-      // 递归处理
+      // 递归处理（不再特殊处理 base64 data 字段）
       result[key] = this.sanitize(value);
     }
 
@@ -148,7 +137,7 @@ export class PipelineContext {
   }
 
   /**
-   * 检查是否为 base64 字符串
+   * 检查是否为 base64 字符串（保留用于其他用途）
    */
   isBase64(str) {
     if (typeof str !== 'string' || str.length < 100) return false;

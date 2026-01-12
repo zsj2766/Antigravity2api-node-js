@@ -74,9 +74,40 @@ if (window.AgTheme) {
   window.AgTheme.bindThemeToggle(themeToggleBtn);
 }
 
-// Inject styles for error preview
+// Inject styles for error preview and large data display
 const errorPreviewStyle = document.createElement('style');
 errorPreviewStyle.textContent = `
+  /* 大型数据（如 base64）折叠显示样式 */
+  .large-data-container {
+    display: inline;
+  }
+  .large-data-label {
+    color: var(--muted, #6b7280);
+    font-style: italic;
+    background: var(--subtle-bg, #f3f4f6);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 11px;
+  }
+  .large-data-toggle {
+    margin-left: 8px;
+    font-size: 10px;
+    padding: 2px 8px;
+    vertical-align: middle;
+  }
+  .large-data-content {
+    margin-top: 8px;
+    padding: 8px;
+    background: var(--subtle-bg, #f9fafb);
+    border: 1px solid var(--border, #e5e7eb);
+    border-radius: 4px;
+    word-break: break-all;
+    white-space: pre-wrap;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 11px;
+    max-height: 300px;
+    overflow-y: auto;
+  }
   .log-error-preview {
     margin-top: 6px;
     padding: 6px;
@@ -150,12 +181,106 @@ function escapeHtml(str) {
     .replace(/'/g, '&#39;');
 }
 
-function formatJson(value) {
+/**
+ * 格式化 JSON 数据，对大型数据（如 base64）添加折叠功能
+ */
+function formatJson(value, maxInlineLength = 5000) {
   try {
-    return escapeHtml(JSON.stringify(value ?? {}, null, 2));
+    const json = JSON.stringify(value ?? {}, null, 2);
+
+    // 检测是否包含大型 base64 数据或超长字符串
+    if (json.length > maxInlineLength) {
+      return formatLargeJson(value, maxInlineLength);
+    }
+
+    return escapeHtml(json);
   } catch (e) {
     return escapeHtml(String(value));
   }
+}
+
+/**
+ * 处理大型 JSON 数据，对超长字段添加折叠功能
+ */
+function formatLargeJson(value, maxInlineLength = 5000) {
+  const uniqueId = 'collapse-' + Math.random().toString(36).substr(2, 9);
+
+  // 递归处理对象，将大型字段标记为可折叠
+  function processValue(val, depth = 0) {
+    if (val === null || val === undefined) return val;
+
+    if (typeof val === 'string') {
+      // 检测 base64 或超长字符串
+      if (val.length > 1000) {
+        const isBase64 = /^[A-Za-z0-9+/=]{100,}$/.test(val.slice(0, 200));
+        const preview = val.slice(0, 100) + '...';
+        const label = isBase64 ? `[BASE64 数据: ${val.length} 字符]` : `[长文本: ${val.length} 字符]`;
+
+        return {
+          __largeData: true,
+          preview,
+          label,
+          fullData: val
+        };
+      }
+      return val;
+    }
+
+    if (Array.isArray(val)) {
+      return val.map(item => processValue(item, depth + 1));
+    }
+
+    if (typeof val === 'object') {
+      const result = {};
+      for (const [key, v] of Object.entries(val)) {
+        result[key] = processValue(v, depth + 1);
+      }
+      return result;
+    }
+
+    return val;
+  }
+
+  // 将处理后的值转为 HTML
+  function toHtml(val, indent = 0) {
+    const spaces = '  '.repeat(indent);
+
+    if (val === null) return 'null';
+    if (val === undefined) return 'undefined';
+
+    if (typeof val === 'string') return escapeHtml(JSON.stringify(val));
+    if (typeof val === 'number' || typeof val === 'boolean') return String(val);
+
+    // 处理标记的大型数据
+    if (val && val.__largeData) {
+      const collapseId = 'data-' + Math.random().toString(36).substr(2, 9);
+      return `<span class="large-data-container">
+        <span class="large-data-label">${escapeHtml(val.label)}</span>
+        <button class="large-data-toggle mini-btn" onclick="toggleLargeData('${collapseId}')">展开</button>
+        <div id="${collapseId}" class="large-data-content" style="display:none">${escapeHtml(val.fullData)}</div>
+      </span>`;
+    }
+
+    if (Array.isArray(val)) {
+      if (val.length === 0) return '[]';
+      const items = val.map(item => spaces + '  ' + toHtml(item, indent + 1)).join(',\n');
+      return '[\n' + items + '\n' + spaces + ']';
+    }
+
+    if (typeof val === 'object') {
+      const keys = Object.keys(val);
+      if (keys.length === 0) return '{}';
+      const items = keys.map(key =>
+        spaces + '  ' + escapeHtml(JSON.stringify(key)) + ': ' + toHtml(val[key], indent + 1)
+      ).join(',\n');
+      return '{\n' + items + '\n' + spaces + '}';
+    }
+
+    return escapeHtml(String(val));
+  }
+
+  const processed = processValue(value);
+  return toHtml(processed);
 }
 
 function getAccountDisplayName(acc) {
@@ -2313,4 +2438,23 @@ if (freezeHistoryModal) {
       closeFreezeHistoryModalFn();
     }
   });
+}
+
+// ========== 大型数据折叠功能 ==========
+/**
+ * 切换大型数据（如 base64）的显示/隐藏状态
+ * @param {string} id - 数据容器的 ID
+ */
+function toggleLargeData(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+
+  const isVisible = el.style.display !== 'none';
+  el.style.display = isVisible ? 'none' : 'block';
+
+  // 更新按钮文本
+  const btn = el.previousElementSibling;
+  if (btn && btn.classList.contains('large-data-toggle')) {
+    btn.textContent = isVisible ? '展开' : '收起';
+  }
 }
